@@ -114,6 +114,31 @@ func TestCheckerRecoverySetsGaugeBackToOne(t *testing.T) {
 	}
 }
 
+func TestCheckNowPerformsImmediateHealthPass(t *testing.T) {
+	host, port, responsive, stop := startToggleUpstream(t)
+	defer stop()
+
+	responsive.Store(true)
+
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams:        []UpstreamTarget{{Address: host, Port: port}},
+		IntervalSeconds:  30,
+		TimeoutSeconds:   1,
+		FailureThreshold: 2,
+	}, collector)
+
+	checker.CheckNow(context.Background())
+
+	upstream := fmt.Sprintf("%s:%d", host, port)
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(upstream)); got != 1 {
+		t.Fatalf("expected upstream healthy gauge = 1, got %v", got)
+	}
+	if !checker.HasHealthyUpstream() {
+		t.Fatal("expected checker to report healthy upstream after CheckNow")
+	}
+}
+
 func startToggleUpstream(t *testing.T) (string, int, *atomic.Bool, func()) {
 	t.Helper()
 

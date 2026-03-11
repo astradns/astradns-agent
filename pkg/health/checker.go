@@ -68,7 +68,7 @@ func NewChecker(config CheckerConfig, collector *metrics.Collector) *Checker {
 
 // Run starts periodic health checks and blocks until the context is canceled.
 func (c *Checker) Run(ctx context.Context) {
-	c.checkAll(ctx)
+	c.CheckNow(ctx)
 
 	ticker := time.NewTicker(time.Duration(c.config.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
@@ -81,6 +81,11 @@ func (c *Checker) Run(ctx context.Context) {
 			c.checkAll(ctx)
 		}
 	}
+}
+
+// CheckNow executes a full health-check pass immediately.
+func (c *Checker) CheckNow(ctx context.Context) {
+	c.checkAll(ctx)
 }
 
 // HasHealthyUpstream reports whether at least one upstream is currently healthy.

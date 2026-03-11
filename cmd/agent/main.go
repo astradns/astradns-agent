@@ -109,6 +109,7 @@ func main() {
 		TimeoutSeconds:   2,
 		FailureThreshold: 3,
 	}, collector)
+	checker.CheckNow(ctx)
 
 	metricsEvents := make(chan proxy.QueryEvent, defaultWorkerBuffer)
 	loggerEvents := make(chan proxy.QueryEvent, defaultWorkerBuffer)

@@ -23,9 +23,11 @@ spec:
         image: astradns/agent:latest
         ports:
         - containerPort: 5353
+          hostPort: 5353
           name: dns
           protocol: UDP
         - containerPort: 5353
+          hostPort: 5353
           name: dns-tcp
           protocol: TCP
         - containerPort: 9153
@@ -51,6 +53,8 @@ spec:
           readOnly: true
         - name: engine-config
           mountPath: /var/run/astradns/engine
+        - name: tmp
+          mountPath: /tmp
         livenessProbe:
           httpGet:
             path: /healthz
@@ -76,12 +80,13 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
-            add: ["NET_BIND_SERVICE"]
       volumes:
       - name: config
         configMap:
           name: astradns-agent-config
       - name: engine-config
+        emptyDir: {}
+      - name: tmp
         emptyDir: {}
 ---
 apiVersion: v1
