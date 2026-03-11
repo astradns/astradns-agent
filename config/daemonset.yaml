@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: astradns-agent
+  namespace: astradns-system
+  labels:
+    app.kubernetes.io/name: astradns-agent
+    app.kubernetes.io/component: data-plane
+    app.kubernetes.io/part-of: astradns
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: astradns-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: astradns-agent
+        app.kubernetes.io/component: data-plane
+    spec:
+      serviceAccountName: astradns-agent
+      containers:
+      - name: agent
+        image: astradns/agent:latest
+        ports:
+        - containerPort: 5353
+          name: dns
+          protocol: UDP
+        - containerPort: 5353
+          name: dns-tcp
+          protocol: TCP
+        - containerPort: 9153
+          name: metrics
+          protocol: TCP
+        - containerPort: 8080
+          name: health
+          protocol: TCP
+        env:
+        - name: ASTRADNS_ENGINE_TYPE
+          value: "unbound"
+        - name: ASTRADNS_CONFIG_PATH
+          value: "/etc/astradns/config"
+        - name: ASTRADNS_LOG_MODE
+          value: "sampled"
+        - name: ASTRADNS_LOG_SAMPLE_RATE
+          value: "0.1"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/astradns/config
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: false
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+            add: ["NET_BIND_SERVICE"]
+      volumes:
+      - name: config
+        configMap:
+          name: astradns-agent-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: astradns-agent
+  namespace: astradns-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: astradns-agent-metrics
+  namespace: astradns-system
+  labels:
+    app.kubernetes.io/name: astradns-agent
+spec:
+  selector:
+    app.kubernetes.io/name: astradns-agent
+  ports:
+  - name: metrics
+    port: 9153
+    targetPort: metrics
+    protocol: TCP

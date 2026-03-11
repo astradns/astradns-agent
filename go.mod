@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/astradns/astradns-types v0.0.0
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2
 )

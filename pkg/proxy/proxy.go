@@ -135,6 +135,8 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 
 	_ = w.WriteMsg(response)
 
+	latencyMs := float64(time.Since(start).Microseconds()) / 1000.0
+
 	event := QueryEvent{
 		Timestamp:    start,
 		SourceIP:     sourceIP(w.RemoteAddr()),
@@ -142,8 +144,8 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 		QueryType:    queryType(request),
 		ResponseCode: responseCode(response),
 		Upstream:     p.config.EngineAddr,
-		LatencyMs:    float64(time.Since(start).Microseconds()) / 1000.0,
-		CacheHit:     false,
+		LatencyMs:    latencyMs,
+		CacheHit:     err == nil && response != nil && latencyMs < 2.0,
 	}
 
 	select {

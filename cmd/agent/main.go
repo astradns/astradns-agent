@@ -23,6 +23,7 @@ import (
 	"github.com/astradns/astradns-agent/pkg/logging"
 	"github.com/astradns/astradns-agent/pkg/metrics"
 	"github.com/astradns/astradns-agent/pkg/proxy"
+	"github.com/astradns/astradns-agent/pkg/watcher"
 	"github.com/astradns/astradns-types/engine"
 )
 
@@ -33,7 +34,7 @@ const (
 	defaultMetricsAddr  = ":9153"
 	defaultHealthAddr   = ":8080"
 	defaultConfigPath   = "/etc/astradns/config"
-	defaultConfigFile   = "engine.json"
+	defaultConfigFile   = "config.json"
 	defaultLogMode      = "sampled"
 	defaultLogSample    = 0.1
 	defaultWorkerBuffer = 10000
@@ -125,7 +126,7 @@ func main() {
 		Handler: newHealthHandler(eng, checker),
 	}
 
-	componentErrs := make(chan error, 4)
+	componentErrs := make(chan error, 5)
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -179,6 +180,32 @@ func main() {
 		defer wg.Done()
 		if err := healthServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			componentErrs <- fmt.Errorf("health server failed: %w", err)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		configWatcher := watcher.New(cfg.ConfigDir, func(ctx context.Context) error {
+			newConfig, err := loadEngineConfig(cfg.ConfigFile, cfg.EngineAddr)
+			if err != nil {
+				collector.AgentConfigReloadErrorsTotal.Inc()
+				return fmt.Errorf("reload config: %w", err)
+			}
+			if _, err := eng.Configure(ctx, newConfig); err != nil {
+				collector.AgentConfigReloadErrorsTotal.Inc()
+				return fmt.Errorf("reconfigure engine: %w", err)
+			}
+			if err := eng.Reload(ctx); err != nil {
+				collector.AgentConfigReloadErrorsTotal.Inc()
+				return fmt.Errorf("reload engine: %w", err)
+			}
+			collector.AgentConfigReloadTotal.Inc()
+			logger.Info("engine config reloaded successfully")
+			return nil
+		}, logger)
+		if err := configWatcher.Run(ctx); err != nil {
+			componentErrs <- fmt.Errorf("config watcher failed: %w", err)
 		}
 	}()
 
