@@ -126,6 +126,25 @@ func TestRunOffModeLogsNothing(t *testing.T) {
 	}
 }
 
+func TestRunDrainsBufferedEventsOnCancellation(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	logger := newQueryLogger(LoggerConfig{Mode: LogModeFull}, buffer)
+
+	events := make(chan proxy.QueryEvent, 1)
+	events <- sampleEvent("NOERROR")
+	close(events)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	logger.Run(ctx, events)
+
+	lines := nonEmptyLines(buffer.String())
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 drained log line, got %d", len(lines))
+	}
+}
+
 func sampleEvent(rcode string) proxy.QueryEvent {
 	return proxy.QueryEvent{
 		SourceIP:     "10.244.2.5",

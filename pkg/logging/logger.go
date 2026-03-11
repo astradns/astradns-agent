@@ -49,29 +49,37 @@ func NewQueryLogger(config LoggerConfig) *QueryLogger {
 func (l *QueryLogger) Run(ctx context.Context, events <-chan proxy.QueryEvent) {
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case event, ok := <-events:
 			if !ok {
 				return
 			}
-			if !l.shouldLog(event) {
-				continue
+			l.logEvent(event)
+		case <-ctx.Done():
+			for event := range events {
+				l.logEvent(event)
 			}
-
-			l.logger.Info(
-				"dns_query",
-				slog.String("source_ip", event.SourceIP),
-				slog.String("namespace", "unknown"),
-				slog.String("domain", event.Domain),
-				slog.String("qtype", event.QueryType),
-				slog.String("rcode", event.ResponseCode),
-				slog.String("upstream", event.Upstream),
-				slog.Float64("latency_ms", event.LatencyMs),
-				slog.Bool("cache_hit", event.CacheHit),
-			)
+			return
 		}
 	}
+}
+
+func (l *QueryLogger) logEvent(event proxy.QueryEvent) {
+	if !l.shouldLog(event) {
+		return
+	}
+
+	l.logger.Info(
+		"dns_query",
+		slog.String("source_ip", event.SourceIP),
+		slog.String("namespace", "unknown"),
+		slog.String("domain", event.Domain),
+		slog.String("qtype", event.QueryType),
+		slog.String("rcode", event.ResponseCode),
+		slog.String("upstream", event.Upstream),
+		slog.Float64("latency_ms", event.LatencyMs),
+		slog.Bool("cache_hit_known", event.CacheHitKnown),
+		slog.Bool("cache_hit", event.CacheHit),
+	)
 }
 
 func newQueryLogger(config LoggerConfig, writer io.Writer) *QueryLogger {

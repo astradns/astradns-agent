@@ -29,6 +29,7 @@ type Collector struct {
 	AgentConfigReloadTotal       prometheus.Counter
 	AgentConfigReloadErrorsTotal prometheus.Counter
 	ProxyDroppedEventsTotal      prometheus.Counter
+	FanOutDroppedEventsTotal     prometheus.Counter
 }
 
 // NewCollector creates a Collector and registers all AstraDNS metrics.
@@ -100,6 +101,10 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 			Name: "astradns_proxy_dropped_events_total",
 			Help: "Total number of query events dropped by the proxy pipeline.",
 		}),
+		FanOutDroppedEventsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "astradns_fanout_dropped_events_total",
+			Help: "Total number of query events dropped while fanning out to workers.",
+		}),
 	}
 
 	registry.MustRegister(
@@ -118,6 +123,7 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 		c.AgentConfigReloadTotal,
 		c.AgentConfigReloadErrorsTotal,
 		c.ProxyDroppedEventsTotal,
+		c.FanOutDroppedEventsTotal,
 	)
 
 	c.AgentUp.Set(1)
@@ -140,10 +146,12 @@ func (c *Collector) ProcessEvent(event proxy.QueryEvent) {
 	c.QueriesTotal.Inc()
 	c.QueriesByType.WithLabelValues(qType).Inc()
 
-	if event.CacheHit {
-		c.CacheHitsTotal.Inc()
-	} else {
-		c.CacheMissesTotal.Inc()
+	if event.CacheHitKnown {
+		if event.CacheHit {
+			c.CacheHitsTotal.Inc()
+		} else {
+			c.CacheMissesTotal.Inc()
+		}
 	}
 
 	c.UpstreamQueriesTotal.WithLabelValues(upstream).Inc()
@@ -166,13 +174,16 @@ func (c *Collector) ProcessEvent(event proxy.QueryEvent) {
 func (c *Collector) Run(ctx context.Context, events <-chan proxy.QueryEvent) {
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case event, ok := <-events:
 			if !ok {
 				return
 			}
 			c.ProcessEvent(event)
+		case <-ctx.Done():
+			for event := range events {
+				c.ProcessEvent(event)
+			}
+			return
 		}
 	}
 }

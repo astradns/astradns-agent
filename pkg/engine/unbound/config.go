@@ -10,6 +10,10 @@ import (
 // RenderConfig renders an EngineConfig to an unbound.conf string.
 func RenderConfig(config engine.EngineConfig) (string, error) {
 	normalized := normalizeConfig(config)
+	if err := engine.ValidateTemplateConfig(normalized); err != nil {
+		return "", err
+	}
+
 	data := engine.NewTemplateData(normalized)
 
 	tmpl, err := template.New("unbound").Parse(engine.UnboundConfigTemplate)

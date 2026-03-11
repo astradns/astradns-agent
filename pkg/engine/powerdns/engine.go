@@ -44,6 +44,8 @@ func (e *PowerDNSEngine) Configure(ctx context.Context, config engine.EngineConf
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	rendered, err := RenderConfig(config)
 	if err != nil {
@@ -59,10 +61,8 @@ func (e *PowerDNSEngine) Configure(ctx context.Context, config engine.EngineConf
 		return "", fmt.Errorf("write powerdns config: %w", err)
 	}
 
-	e.mu.Lock()
 	e.config = normalizeConfig(config)
 	e.configPath = configPath
-	e.mu.Unlock()
 
 	return configPath, nil
 }
@@ -78,8 +78,11 @@ func (e *PowerDNSEngine) Start(ctx context.Context) error {
 	if e.configPath == "" {
 		return errors.New("powerdns is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	cmd := exec.CommandContext(ctx, "pdns_recursor", fmt.Sprintf("--config-dir=%s", e.configDir))
+	cmd := exec.Command("pdns_recursor", fmt.Sprintf("--config-dir=%s", e.configDir))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start powerdns: %w", err)
 	}

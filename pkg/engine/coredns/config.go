@@ -10,6 +10,10 @@ import (
 // RenderConfig renders an EngineConfig to a CoreDNS Corefile string.
 func RenderConfig(config engine.EngineConfig) (string, error) {
 	normalized := normalizeConfig(config)
+	if err := engine.ValidateTemplateConfig(normalized); err != nil {
+		return "", err
+	}
+
 	data := engine.NewTemplateData(normalized)
 
 	tmpl, err := template.New("coredns").Parse(engine.CorefileTemplate)

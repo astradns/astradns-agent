@@ -44,6 +44,8 @@ func (e *UnboundEngine) Configure(ctx context.Context, config engine.EngineConfi
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	rendered, err := RenderConfig(config)
 	if err != nil {
@@ -59,10 +61,8 @@ func (e *UnboundEngine) Configure(ctx context.Context, config engine.EngineConfi
 		return "", fmt.Errorf("write unbound config: %w", err)
 	}
 
-	e.mu.Lock()
 	e.config = normalizeConfig(config)
 	e.configPath = configPath
-	e.mu.Unlock()
 
 	return configPath, nil
 }
@@ -78,8 +78,11 @@ func (e *UnboundEngine) Start(ctx context.Context) error {
 	if e.configPath == "" {
 		return errors.New("unbound is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-	cmd := exec.CommandContext(ctx, "unbound", "-d", "-c", e.configPath)
+	cmd := exec.Command("unbound", "-d", "-c", e.configPath)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start unbound: %w", err)
 	}

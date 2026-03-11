@@ -143,7 +143,9 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		fanOut(proxyInstance.Events(), metricsEvents, loggerEvents)
+		fanOut(proxyInstance.Events(), func() {
+			collector.FanOutDroppedEventsTotal.Inc()
+		}, metricsEvents, loggerEvents)
 	}()
 
 	wg.Add(1)
@@ -407,12 +409,15 @@ func newHealthHandler(eng engine.Engine, checker *health.Checker) http.Handler {
 	return mux
 }
 
-func fanOut(in <-chan proxy.QueryEvent, outs ...chan<- proxy.QueryEvent) {
+func fanOut(in <-chan proxy.QueryEvent, onDrop func(), outs ...chan<- proxy.QueryEvent) {
 	for event := range in {
 		for _, out := range outs {
 			select {
 			case out <- event:
 			default:
+				if onDrop != nil {
+					onDrop()
+				}
 			}
 		}
 	}

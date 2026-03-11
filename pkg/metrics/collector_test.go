@@ -15,7 +15,7 @@ import (
 
 func TestProcessEventCacheHitIncrementsCacheHits(t *testing.T) {
 	collector := NewCollector(prometheus.NewRegistry())
-	collector.ProcessEvent(proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53", CacheHit: true})
+	collector.ProcessEvent(proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53", CacheHitKnown: true, CacheHit: true})
 
 	if got := testutil.ToFloat64(collector.CacheHitsTotal); got != 1 {
 		t.Fatalf("expected cache hits = 1, got %v", got)
@@ -24,10 +24,22 @@ func TestProcessEventCacheHitIncrementsCacheHits(t *testing.T) {
 
 func TestProcessEventCacheMissIncrementsCacheMisses(t *testing.T) {
 	collector := NewCollector(prometheus.NewRegistry())
-	collector.ProcessEvent(proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53", CacheHit: false})
+	collector.ProcessEvent(proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53", CacheHitKnown: true, CacheHit: false})
 
 	if got := testutil.ToFloat64(collector.CacheMissesTotal); got != 1 {
 		t.Fatalf("expected cache misses = 1, got %v", got)
+	}
+}
+
+func TestProcessEventUnknownCacheStatusDoesNotIncrementCacheCounters(t *testing.T) {
+	collector := NewCollector(prometheus.NewRegistry())
+	collector.ProcessEvent(proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53", CacheHitKnown: false})
+
+	if got := testutil.ToFloat64(collector.CacheHitsTotal); got != 0 {
+		t.Fatalf("expected cache hits = 0, got %v", got)
+	}
+	if got := testutil.ToFloat64(collector.CacheMissesTotal); got != 0 {
+		t.Fatalf("expected cache misses = 0, got %v", got)
 	}
 }
 
@@ -93,6 +105,22 @@ func TestCollectorRunConsumesEvents(t *testing.T) {
 	}
 }
 
+func TestCollectorRunDrainsBufferedEventsOnCancellation(t *testing.T) {
+	collector := NewCollector(prometheus.NewRegistry())
+	events := make(chan proxy.QueryEvent, 1)
+	events <- proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53"}
+	close(events)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	collector.Run(ctx, events)
+
+	if got := testutil.ToFloat64(collector.QueriesTotal); got != 1 {
+		t.Fatalf("expected queries total = 1 after draining, got %v", got)
+	}
+}
+
 func TestHandlerExposesExactMetricNames(t *testing.T) {
 	collector := NewCollector(prometheus.NewRegistry())
 	collector.QueriesByType.WithLabelValues("A").Inc()
@@ -133,6 +161,7 @@ func TestHandlerExposesExactMetricNames(t *testing.T) {
 		"astradns_agent_config_reload_total",
 		"astradns_agent_config_reload_errors_total",
 		"astradns_proxy_dropped_events_total",
+		"astradns_fanout_dropped_events_total",
 	}
 
 	for _, metricName := range expectedMetricNames {
