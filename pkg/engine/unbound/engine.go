@@ -145,7 +145,7 @@ func (e *UnboundEngine) HealthCheck(ctx context.Context) (bool, error) {
 	msg.SetQuestion(".", dns.TypeA)
 
 	client := &dns.Client{}
-	resp, _, err := client.ExchangeContext(ctx, msg, net.JoinHostPort(listenAddr, strconv.Itoa(listenPort)))
+	resp, _, err := client.ExchangeContext(ctx, msg, net.JoinHostPort(listenAddr, strconv.Itoa(int(listenPort))))
 	if err != nil {
 		return false, err
 	}

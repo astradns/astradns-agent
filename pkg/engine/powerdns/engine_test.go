@@ -111,7 +111,7 @@ func testEngineConfig(listenAddr string, listenPort int) engine.EngineConfig {
 			PrefetchThreshold: 10,
 		},
 		ListenAddr: listenAddr,
-		ListenPort: listenPort,
+		ListenPort: int32(listenPort),
 	}
 }
 

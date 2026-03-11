@@ -103,7 +103,7 @@ func main() {
 
 	upstreams := make([]health.UpstreamTarget, 0, len(engineConfig.Upstreams))
 	for _, upstream := range engineConfig.Upstreams {
-		upstreams = append(upstreams, health.UpstreamTarget{Address: upstream.Address, Port: upstream.Port})
+		upstreams = append(upstreams, health.UpstreamTarget{Address: upstream.Address, Port: int(upstream.Port)})
 	}
 
 	checker := health.NewChecker(health.CheckerConfig{
@@ -346,7 +346,7 @@ func defaultEngineConfig(engineAddr string) engine.EngineConfig {
 			PrefetchThreshold: 10,
 		},
 		ListenAddr: host,
-		ListenPort: port,
+		ListenPort: int32(port),
 	}
 }
 
