@@ -112,24 +112,41 @@ func (c *Checker) checkUpstream(ctx context.Context, upstream UpstreamTarget) {
 		upstream.Port = 53
 	}
 
-	timeout := time.Duration(c.config.TimeoutSeconds) * time.Second
-	client := &dns.Client{Net: "udp", Timeout: timeout}
-	query := new(dns.Msg)
-	query.SetQuestion("health.astradns.local.", dns.TypeA)
-
 	label := upstreamLabel(upstream)
 
-	response, rtt, err := client.Exchange(query, label)
-	if err != nil || response == nil {
-		c.recordFailure(label, isTimeoutErr(err))
+	response, rtt, err := c.probeUpstream(label, "udp")
+	if err == nil && response != nil {
+		c.recordHealthy(label, rtt)
 		return
 	}
 
-	c.recordHealthy(label, rtt)
+	udpErr := err
+	response, rtt, err = c.probeUpstream(label, "tcp")
+	if err == nil && response != nil {
+		c.recordHealthy(label, rtt)
+		return
+	}
+
+	timedOut := isTimeoutErr(udpErr) && isTimeoutErr(err)
+	c.recordFailure(label, timedOut)
 
 	if ctx.Err() != nil {
 		return
 	}
+}
+
+func (c *Checker) probeUpstream(upstream, network string) (*dns.Msg, time.Duration, error) {
+	timeout := time.Duration(c.config.TimeoutSeconds) * time.Second
+	client := &dns.Client{Net: network, Timeout: timeout}
+	query := new(dns.Msg)
+	query.SetQuestion("health.astradns.local.", dns.TypeA)
+
+	response, rtt, err := client.Exchange(query, upstream)
+	if err != nil || response == nil {
+		return response, rtt, err
+	}
+
+	return response, rtt, nil
 }
 
 func (c *Checker) recordFailure(upstream string, timedOut bool) {

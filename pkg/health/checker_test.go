@@ -139,6 +139,32 @@ func TestCheckNowPerformsImmediateHealthPass(t *testing.T) {
 	}
 }
 
+func TestCheckerFallsBackToTCPWhenUDPUnavailable(t *testing.T) {
+	host, port, stop := startTCPOnlyUpstream(t)
+	defer stop()
+
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams:        []UpstreamTarget{{Address: host, Port: port}},
+		IntervalSeconds:  30,
+		TimeoutSeconds:   1,
+		FailureThreshold: 1,
+	}, collector)
+
+	checker.CheckNow(context.Background())
+
+	upstream := fmt.Sprintf("%s:%d", host, port)
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(upstream)); got != 1 {
+		t.Fatalf("expected upstream healthy gauge = 1 via TCP fallback, got %v", got)
+	}
+	if got := testutil.ToFloat64(collector.UpstreamFailuresTotal.WithLabelValues(upstream)); got != 0 {
+		t.Fatalf("expected no recorded failure when TCP fallback succeeds, got %v", got)
+	}
+	if !checker.HasHealthyUpstream() {
+		t.Fatal("expected checker to report healthy upstream after TCP fallback")
+	}
+}
+
 func startToggleUpstream(t *testing.T) (string, int, *atomic.Bool, func()) {
 	t.Helper()
 
@@ -173,6 +199,37 @@ func startToggleUpstream(t *testing.T) (string, int, *atomic.Bool, func()) {
 	}
 
 	return addr.IP.String(), addr.Port, responsive, stop
+}
+
+func startTCPOnlyUpstream(t *testing.T) (string, int, func()) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start test tcp upstream: %v", err)
+	}
+
+	addr := listener.Addr().(*net.TCPAddr)
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		response := new(dns.Msg)
+		response.SetReply(r)
+		record, recordErr := dns.NewRR(fmt.Sprintf("%s 60 IN A 127.0.0.1", r.Question[0].Name))
+		if recordErr == nil {
+			response.Answer = append(response.Answer, record)
+		}
+		_ = w.WriteMsg(response)
+	})
+
+	server := &dns.Server{Listener: listener, Net: "tcp", Handler: handler}
+	go func() {
+		_ = server.ActivateAndServe()
+	}()
+
+	stop := func() {
+		_ = server.Shutdown()
+	}
+
+	return addr.IP.String(), addr.Port, stop
 }
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
