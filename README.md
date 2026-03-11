@@ -94,5 +94,5 @@ make vet
 ### Docker
 
 ```sh
-docker build -t astradns-agent .
+docker build -f Dockerfile -t astradns-agent ..
 ```
