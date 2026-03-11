@@ -15,12 +15,22 @@ RUN go mod download
 COPY . .
 
 # Build
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o astradns-agent cmd/agent/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /out/astradns-agent cmd/agent/main.go
 
-# Use distroless as minimal base image to package the agent binary
-FROM gcr.io/distroless/static:nonroot
-WORKDIR /
-COPY --from=builder /workspace/astradns-agent .
+# Runtime image with unbound resolver binaries.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    unbound \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /out/astradns-agent /usr/local/bin/astradns-agent
+
+RUN useradd --system --uid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin astradns && \
+    mkdir -p /var/run/astradns/engine && \
+    chown -R 65532:65532 /var/run/astradns
+
 USER 65532:65532
 
-ENTRYPOINT ["/astradns-agent"]
+ENTRYPOINT ["/usr/local/bin/astradns-agent"]

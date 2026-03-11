@@ -28,6 +28,10 @@ type ConfigWatcher struct {
 // New creates a ConfigWatcher that monitors configDir for filesystem events
 // and calls onReload after a debounce period when changes are detected.
 func New(configDir string, onReload ReloadFunc, logger *slog.Logger) *ConfigWatcher {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &ConfigWatcher{
 		configDir: configDir,
 		onReload:  onReload,
@@ -70,7 +74,8 @@ func (w *ConfigWatcher) Run(ctx context.Context) error {
 				return nil
 			}
 
-			if !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) {
+			if !event.Has(fsnotify.Create) && !event.Has(fsnotify.Write) &&
+				!event.Has(fsnotify.Rename) && !event.Has(fsnotify.Remove) && !event.Has(fsnotify.Chmod) {
 				continue
 			}
 

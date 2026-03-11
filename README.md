@@ -37,24 +37,36 @@ The agent supports multiple DNS engine backends, selected at startup via the `AS
 
 ## Configuration
 
-The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at the path specified by `ASTRADNS_CONFIG_PATH` (default: `/etc/astradns/config/`). The operator writes this ConfigMap; the agent watches it for changes.
+The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADNS_CONFIG_PATH` (default: `/etc/astradns/config/config.json`). Engine-specific rendered files are written to `ASTRADNS_ENGINE_CONFIG_DIR` (default: `/var/run/astradns/engine`).
+
+`ASTRADNS_CONFIG_PATH` can be either a directory or a file path:
+
+- Directory: `<path>/config.json` is used.
+- File path: that file is used directly.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `ASTRADNS_ENGINE_TYPE` | `unbound` | DNS engine backend to use |
-| `ASTRADNS_CONFIG_PATH` | `/etc/astradns/config` | Path to ConfigMap mount containing EngineConfig JSON |
-| `ASTRADNS_LISTEN_ADDR` | `:5353` | Address the DNS proxy listens on |
+| `ASTRADNS_CONFIG_PATH` | `/etc/astradns/config/config.json` | ConfigMap mount path (directory or `config.json` file path) |
+| `ASTRADNS_ENGINE_CONFIG_DIR` | `/var/run/astradns/engine` | Writable directory for generated engine config files |
+| `ASTRADNS_LISTEN_ADDR` | `0.0.0.0:5353` | Address the DNS proxy listens on |
 | `ASTRADNS_ENGINE_ADDR` | `127.0.0.1:5354` | Address of the engine subprocess |
 | `ASTRADNS_METRICS_ADDR` | `:9153` | Address for the Prometheus metrics endpoint |
 | `ASTRADNS_HEALTH_ADDR` | `:8080` | Address for the health check endpoint |
-| `ASTRADNS_LOG_MODE` | `sampled` | Query log mode (`all`, `sampled`, `none`) |
+| `ASTRADNS_LOG_MODE` | `sampled` | Query log mode (`full`, `sampled`, `errors-only`, `off`) |
 | `ASTRADNS_LOG_SAMPLE_RATE` | `0.1` | Fraction of queries to log when mode is `sampled` |
+
+## Container Image Notes
+
+The default container image includes the `unbound` engine binary. `coredns` and `powerdns` engine types remain available in code but require a custom image that also ships those executables.
 
 ## Deployment
 
 The Kubernetes manifest is at `config/daemonset.yaml`. It includes the DaemonSet, ServiceAccount, and metrics Service.
+
+The manifest targets namespace `astradns-operator-system` to match the operator's default deployment namespace and shared `astradns-agent-config` ConfigMap.
 
 ```sh
 kubectl apply -f config/daemonset.yaml
@@ -72,6 +84,12 @@ make test
 # Run static analysis
 make vet
 ```
+
+## Contribution Policy
+
+- Human and AI contributions: `CONTRIBUTING.md`
+- OpenCode-specific guardrails: `OPENCODE_RULES.md`
+- Repository-level AI constraints: `AGENTS.md`
 
 ### Docker
 

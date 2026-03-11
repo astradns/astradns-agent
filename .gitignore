@@ -4,3 +4,4 @@ go.work.sum
 
 # Local build output
 /agent
+/bin/

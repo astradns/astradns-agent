@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: astradns-agent
-  namespace: astradns-system
+  namespace: astradns-operator-system
   labels:
     app.kubernetes.io/name: astradns-agent
     app.kubernetes.io/component: data-plane
@@ -38,7 +38,9 @@ spec:
         - name: ASTRADNS_ENGINE_TYPE
           value: "unbound"
         - name: ASTRADNS_CONFIG_PATH
-          value: "/etc/astradns/config"
+          value: "/etc/astradns/config/config.json"
+        - name: ASTRADNS_ENGINE_CONFIG_DIR
+          value: "/var/run/astradns/engine"
         - name: ASTRADNS_LOG_MODE
           value: "sampled"
         - name: ASTRADNS_LOG_SAMPLE_RATE
@@ -47,6 +49,8 @@ spec:
         - name: config
           mountPath: /etc/astradns/config
           readOnly: true
+        - name: engine-config
+          mountPath: /var/run/astradns/engine
         livenessProbe:
           httpGet:
             path: /healthz
@@ -68,7 +72,7 @@ spec:
             memory: 256Mi
         securityContext:
           runAsNonRoot: true
-          readOnlyRootFilesystem: false
+          readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
@@ -77,18 +81,20 @@ spec:
       - name: config
         configMap:
           name: astradns-agent-config
+      - name: engine-config
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: astradns-agent
-  namespace: astradns-system
+  namespace: astradns-operator-system
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: astradns-agent-metrics
-  namespace: astradns-system
+  namespace: astradns-operator-system
   labels:
     app.kubernetes.io/name: astradns-agent
 spec:

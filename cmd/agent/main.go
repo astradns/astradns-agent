@@ -33,7 +33,8 @@ const (
 	defaultEngineAddr   = "127.0.0.1:5354"
 	defaultMetricsAddr  = ":9153"
 	defaultHealthAddr   = ":8080"
-	defaultConfigPath   = "/etc/astradns/config"
+	defaultConfigPath   = "/etc/astradns/config/config.json"
+	defaultEngineCfgDir = "/var/run/astradns/engine"
 	defaultConfigFile   = "config.json"
 	defaultLogMode      = "sampled"
 	defaultLogSample    = 0.1
@@ -41,15 +42,16 @@ const (
 )
 
 type runtimeConfig struct {
-	EngineType    string
-	ListenAddr    string
-	EngineAddr    string
-	MetricsAddr   string
-	HealthAddr    string
-	ConfigDir     string
-	ConfigFile    string
-	LogMode       logging.LogMode
-	LogSampleRate float64
+	EngineType      string
+	ListenAddr      string
+	EngineAddr      string
+	MetricsAddr     string
+	HealthAddr      string
+	ConfigSourceDir string
+	ConfigFile      string
+	EngineConfigDir string
+	LogMode         logging.LogMode
+	LogSampleRate   float64
 }
 
 func main() {
@@ -59,7 +61,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	eng, err := engine.New(engine.EngineType(cfg.EngineType), cfg.ConfigDir)
+	eng, err := engine.New(engine.EngineType(cfg.EngineType), cfg.EngineConfigDir)
 	if err != nil {
 		logger.Error("failed to create engine", "error", err, "engine_type", cfg.EngineType)
 		os.Exit(1)
@@ -80,7 +82,8 @@ func main() {
 	logger.Info("engine configured", "config_file", generatedPath)
 
 	if err := eng.Start(ctx); err != nil {
-		logger.Error("failed to start engine (continuing)", "error", err)
+		logger.Error("failed to start engine", "error", err)
+		os.Exit(1)
 	}
 
 	proxyInstance := proxy.New(proxy.ProxyConfig{
@@ -186,7 +189,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		configWatcher := watcher.New(cfg.ConfigDir, func(ctx context.Context) error {
+		configWatcher := watcher.New(cfg.ConfigSourceDir, func(ctx context.Context) error {
 			newConfig, err := loadEngineConfig(cfg.ConfigFile, cfg.EngineAddr)
 			if err != nil {
 				collector.AgentConfigReloadErrorsTotal.Inc()
@@ -242,18 +245,19 @@ func main() {
 }
 
 func loadRuntimeConfig() runtimeConfig {
-	configDir, configFile := resolveConfigPaths(getEnv("ASTRADNS_CONFIG_PATH", defaultConfigPath))
+	configSourceDir, configFile := resolveConfigPaths(getEnv("ASTRADNS_CONFIG_PATH", defaultConfigPath))
 
 	return runtimeConfig{
-		EngineType:    getEnv("ASTRADNS_ENGINE_TYPE", defaultEngineType),
-		ListenAddr:    getEnv("ASTRADNS_LISTEN_ADDR", defaultListenAddr),
-		EngineAddr:    getEnv("ASTRADNS_ENGINE_ADDR", defaultEngineAddr),
-		MetricsAddr:   getEnv("ASTRADNS_METRICS_ADDR", defaultMetricsAddr),
-		HealthAddr:    getEnv("ASTRADNS_HEALTH_ADDR", defaultHealthAddr),
-		ConfigDir:     configDir,
-		ConfigFile:    configFile,
-		LogMode:       logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
-		LogSampleRate: getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
+		EngineType:      getEnv("ASTRADNS_ENGINE_TYPE", defaultEngineType),
+		ListenAddr:      getEnv("ASTRADNS_LISTEN_ADDR", defaultListenAddr),
+		EngineAddr:      getEnv("ASTRADNS_ENGINE_ADDR", defaultEngineAddr),
+		MetricsAddr:     getEnv("ASTRADNS_METRICS_ADDR", defaultMetricsAddr),
+		HealthAddr:      getEnv("ASTRADNS_HEALTH_ADDR", defaultHealthAddr),
+		ConfigSourceDir: configSourceDir,
+		ConfigFile:      configFile,
+		EngineConfigDir: getEnv("ASTRADNS_ENGINE_CONFIG_DIR", defaultEngineCfgDir),
+		LogMode:         logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
+		LogSampleRate:   getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
 	}
 }
 
@@ -379,15 +383,25 @@ func newHealthHandler(eng engine.Engine, checker *health.Checker) http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if checker.HasHealthyUpstream() {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ready"))
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		healthy, err := eng.HealthCheck(ctx)
+		if err != nil || !healthy {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("engine unhealthy"))
 			return
 		}
 
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte("no healthy upstreams"))
+		if !checker.HasHealthyUpstream() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("no healthy upstreams"))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	})
 
 	return mux
