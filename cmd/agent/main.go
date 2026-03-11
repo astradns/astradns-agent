@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -32,6 +33,7 @@ const (
 	defaultMetricsAddr  = ":9153"
 	defaultHealthAddr   = ":8080"
 	defaultConfigPath   = "/etc/astradns/config"
+	defaultConfigFile   = "engine.json"
 	defaultLogMode      = "sampled"
 	defaultLogSample    = 0.1
 	defaultWorkerBuffer = 10000
@@ -43,7 +45,8 @@ type runtimeConfig struct {
 	EngineAddr    string
 	MetricsAddr   string
 	HealthAddr    string
-	ConfigPath    string
+	ConfigDir     string
+	ConfigFile    string
 	LogMode       logging.LogMode
 	LogSampleRate float64
 }
@@ -55,16 +58,16 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	eng, err := engine.New(engine.EngineType(cfg.EngineType), cfg.ConfigPath)
+	eng, err := engine.New(engine.EngineType(cfg.EngineType), cfg.ConfigDir)
 	if err != nil {
 		logger.Error("failed to create engine", "error", err, "engine_type", cfg.EngineType)
 		os.Exit(1)
 	}
 	logger.Info("engine selected", "engine_type", eng.Name())
 
-	engineConfig, err := loadEngineConfig(cfg.ConfigPath, cfg.EngineAddr)
+	engineConfig, err := loadEngineConfig(cfg.ConfigFile, cfg.EngineAddr)
 	if err != nil {
-		logger.Error("failed to load engine config", "error", err, "path", cfg.ConfigPath)
+		logger.Error("failed to load engine config", "error", err, "path", cfg.ConfigFile)
 		os.Exit(1)
 	}
 
@@ -212,13 +215,16 @@ func main() {
 }
 
 func loadRuntimeConfig() runtimeConfig {
+	configDir, configFile := resolveConfigPaths(getEnv("ASTRADNS_CONFIG_PATH", defaultConfigPath))
+
 	return runtimeConfig{
 		EngineType:    getEnv("ASTRADNS_ENGINE_TYPE", defaultEngineType),
 		ListenAddr:    getEnv("ASTRADNS_LISTEN_ADDR", defaultListenAddr),
 		EngineAddr:    getEnv("ASTRADNS_ENGINE_ADDR", defaultEngineAddr),
 		MetricsAddr:   getEnv("ASTRADNS_METRICS_ADDR", defaultMetricsAddr),
 		HealthAddr:    getEnv("ASTRADNS_HEALTH_ADDR", defaultHealthAddr),
-		ConfigPath:    getEnv("ASTRADNS_CONFIG_PATH", defaultConfigPath),
+		ConfigDir:     configDir,
+		ConfigFile:    configFile,
 		LogMode:       logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
 		LogSampleRate: getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
 	}
@@ -244,8 +250,24 @@ func getEnvFloat(key string, fallback float64) float64 {
 	return parsed
 }
 
-func loadEngineConfig(configPath, engineAddr string) (engine.EngineConfig, error) {
-	bytes, err := os.ReadFile(configPath)
+func resolveConfigPaths(configPath string) (string, string) {
+	info, err := os.Stat(configPath)
+	if err == nil {
+		if info.IsDir() {
+			return configPath, filepath.Join(configPath, defaultConfigFile)
+		}
+		return filepath.Dir(configPath), configPath
+	}
+
+	if filepath.Ext(configPath) == ".json" {
+		return filepath.Dir(configPath), configPath
+	}
+
+	return configPath, filepath.Join(configPath, defaultConfigFile)
+}
+
+func loadEngineConfig(configFile, engineAddr string) (engine.EngineConfig, error) {
+	bytes, err := os.ReadFile(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return defaultEngineConfig(engineAddr), nil
