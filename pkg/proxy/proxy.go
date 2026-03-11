@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -17,6 +18,7 @@ type ProxyConfig struct {
 	ListenAddr    string
 	EngineAddr    string
 	EventChanSize int
+	OnEventDrop   func()
 }
 
 // Proxy is a DNS proxy that intercepts queries and emits events.
@@ -153,6 +155,9 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 	case p.events <- event:
 	default:
 		p.dropped.Add(1)
+		if p.config.OnEventDrop != nil {
+			p.config.OnEventDrop()
+		}
 	}
 }
 
@@ -208,12 +213,10 @@ func isShutdownErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "closed") {
+	if errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	if strings.Contains(message, "shutdown") {
-		return true
-	}
-	return false
+
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && errors.Is(opErr.Err, net.ErrClosed)
 }

@@ -133,10 +133,7 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 
 // ProcessEvent updates metrics from a single QueryEvent.
 func (c *Collector) ProcessEvent(event proxy.QueryEvent) {
-	qType := event.QueryType
-	if qType == "" {
-		qType = "UNKNOWN"
-	}
+	qType := normalizeQueryTypeLabel(event.QueryType)
 
 	upstream := event.Upstream
 	if upstream == "" {
@@ -167,6 +164,21 @@ func (c *Collector) ProcessEvent(event proxy.QueryEvent) {
 	case "TIMEOUT":
 		c.TimeoutTotal.WithLabelValues(upstream).Inc()
 		c.UpstreamFailuresTotal.WithLabelValues(upstream).Inc()
+	}
+}
+
+func normalizeQueryTypeLabel(queryType string) string {
+	qType := strings.ToUpper(strings.TrimSpace(queryType))
+	if qType == "" {
+		return "UNKNOWN"
+	}
+
+	switch qType {
+	case "A", "AAAA", "CAA", "CNAME", "DS", "DNSKEY", "HTTPS", "MX", "NAPTR", "NS", "PTR",
+		"RRSIG", "SOA", "SRV", "SVCB", "TXT":
+		return qType
+	default:
+		return "OTHER"
 	}
 }
 

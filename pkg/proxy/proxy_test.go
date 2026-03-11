@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,7 +66,15 @@ func TestProxyDropsEventsWhenChannelIsFull(t *testing.T) {
 	defer stopEngine()
 
 	listenAddr := freeLocalAddr(t)
-	p := New(ProxyConfig{ListenAddr: listenAddr, EngineAddr: engineAddr, EventChanSize: 1})
+	var callbackDrops atomic.Int64
+	p := New(ProxyConfig{
+		ListenAddr:    listenAddr,
+		EngineAddr:    engineAddr,
+		EventChanSize: 1,
+		OnEventDrop: func() {
+			callbackDrops.Add(1)
+		},
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -90,6 +99,9 @@ func TestProxyDropsEventsWhenChannelIsFull(t *testing.T) {
 
 	if p.DroppedEvents() == 0 {
 		t.Fatal("expected dropped events counter to increase")
+	}
+	if callbackDrops.Load() == 0 {
+		t.Fatal("expected drop callback to be invoked")
 	}
 
 	cancel()

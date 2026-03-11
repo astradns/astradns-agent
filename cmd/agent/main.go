@@ -86,16 +86,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxyInstance := proxy.New(proxy.ProxyConfig{
-		ListenAddr:    cfg.ListenAddr,
-		EngineAddr:    cfg.EngineAddr,
-		EventChanSize: defaultWorkerBuffer,
-	})
-
 	collector := metrics.NewCollector(nil)
 	queryLogger := logging.NewQueryLogger(logging.LoggerConfig{
 		Mode:       cfg.LogMode,
 		SampleRate: cfg.LogSampleRate,
+	})
+
+	proxyInstance := proxy.New(proxy.ProxyConfig{
+		ListenAddr:    cfg.ListenAddr,
+		EngineAddr:    cfg.EngineAddr,
+		EventChanSize: defaultWorkerBuffer,
+		OnEventDrop: func() {
+			collector.ProxyDroppedEventsTotal.Inc()
+		},
 	})
 
 	upstreams := make([]health.UpstreamTarget, 0, len(engineConfig.Upstreams))
@@ -165,12 +168,6 @@ func main() {
 	go func() {
 		defer wg.Done()
 		checker.Run(ctx)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		trackDroppedEvents(ctx, proxyInstance, collector)
 	}()
 
 	wg.Add(1)
@@ -301,10 +298,12 @@ func resolveConfigPaths(configPath string) (string, string) {
 }
 
 func loadEngineConfig(configFile, engineAddr string) (engine.EngineConfig, error) {
+	defaults := defaultEngineConfig(engineAddr)
+
 	bytes, err := os.ReadFile(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return defaultEngineConfig(engineAddr), nil
+			return defaults, nil
 		}
 		return engine.EngineConfig{}, err
 	}
@@ -314,22 +313,19 @@ func loadEngineConfig(configFile, engineAddr string) (engine.EngineConfig, error
 		return engine.EngineConfig{}, err
 	}
 
-	if cfg.ListenAddr == "" || cfg.ListenPort == 0 {
-		host, port := splitHostPort(engineAddr, "127.0.0.1", 5354)
-		if cfg.ListenAddr == "" {
-			cfg.ListenAddr = host
-		}
-		if cfg.ListenPort == 0 {
-			cfg.ListenPort = port
-		}
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = defaults.ListenAddr
+	}
+	if cfg.ListenPort == 0 {
+		cfg.ListenPort = defaults.ListenPort
 	}
 
 	if len(cfg.Upstreams) == 0 {
-		cfg.Upstreams = defaultEngineConfig(engineAddr).Upstreams
+		cfg.Upstreams = defaults.Upstreams
 	}
 
 	if cfg.Cache.MaxEntries == 0 {
-		cfg.Cache = defaultEngineConfig(engineAddr).Cache
+		cfg.Cache = defaults.Cache
 	}
 
 	return cfg, nil
@@ -425,28 +421,5 @@ func fanOut(in <-chan proxy.QueryEvent, onDrop func(), outs ...chan<- proxy.Quer
 
 	for _, out := range outs {
 		close(out)
-	}
-}
-
-func trackDroppedEvents(ctx context.Context, p *proxy.Proxy, collector *metrics.Collector) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	var last int64
-	for {
-		select {
-		case <-ctx.Done():
-			current := p.DroppedEvents()
-			if current > last {
-				collector.ProxyDroppedEventsTotal.Add(float64(current - last))
-			}
-			return
-		case <-ticker.C:
-			current := p.DroppedEvents()
-			if current > last {
-				collector.ProxyDroppedEventsTotal.Add(float64(current - last))
-				last = current
-			}
-		}
 	}
 }

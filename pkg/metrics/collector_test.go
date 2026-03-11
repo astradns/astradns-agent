@@ -61,6 +61,15 @@ func TestProcessEventServfailIncrementsCounter(t *testing.T) {
 	}
 }
 
+func TestProcessEventBucketsRareQueryTypesIntoOther(t *testing.T) {
+	collector := NewCollector(prometheus.NewRegistry())
+	collector.ProcessEvent(proxy.QueryEvent{QueryType: "NSEC3PARAM", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53"})
+
+	if got := testutil.ToFloat64(collector.QueriesByType.WithLabelValues("OTHER")); got != 1 {
+		t.Fatalf("expected OTHER query label count = 1, got %v", got)
+	}
+}
+
 func TestProcessEventRecordsUpstreamLatencyHistogram(t *testing.T) {
 	collector := NewCollector(prometheus.NewRegistry())
 	collector.ProcessEvent(proxy.QueryEvent{QueryType: "A", ResponseCode: "NOERROR", Upstream: "1.1.1.1:53", LatencyMs: 25})
