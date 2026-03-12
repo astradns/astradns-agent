@@ -265,7 +265,7 @@ func TestCheckerContextCancellationDuringHealthCheck(t *testing.T) {
 	select {
 	case <-done:
 		// Run returned as expected after context cancellation.
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("checker.Run did not return after context cancellation")
 	}
 }
