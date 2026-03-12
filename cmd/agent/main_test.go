@@ -410,6 +410,28 @@ func TestGetEnvDuration(t *testing.T) {
 	}
 }
 
+func TestGetEnvFloat(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_FLOAT", "0.25")
+	if got := getEnvFloat("ASTRADNS_TEST_FLOAT", 0.1); got != 0.25 {
+		t.Fatalf("expected 0.25, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_FLOAT", "not-a-float")
+	if got := getEnvFloat("ASTRADNS_TEST_FLOAT", 0.1); got != 0.1 {
+		t.Fatalf("expected fallback 0.1 for parse error, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_FLOAT", "NaN")
+	if got := getEnvFloat("ASTRADNS_TEST_FLOAT", 0.1); got != 0.1 {
+		t.Fatalf("expected fallback 0.1 for NaN, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_FLOAT", "+Inf")
+	if got := getEnvFloat("ASTRADNS_TEST_FLOAT", 0.1); got != 0.1 {
+		t.Fatalf("expected fallback 0.1 for +Inf, got %v", got)
+	}
+}
+
 func TestValidateEngineConfig(t *testing.T) {
 	valid := defaultEngineConfig("127.0.0.1:5354")
 	if err := validateEngineConfig(valid); err != nil {
