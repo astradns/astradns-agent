@@ -39,6 +39,8 @@ spec:
         env:
         - name: ASTRADNS_ENGINE_TYPE
           value: "unbound"
+        - name: ASTRADNS_LISTEN_ADDR
+          value: "0.0.0.0:5353"
         - name: ASTRADNS_CONFIG_PATH
           value: "/etc/astradns/config/config.json"
         - name: ASTRADNS_ENGINE_CONFIG_DIR

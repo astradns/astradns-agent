@@ -72,6 +72,17 @@ The manifest targets namespace `astradns-operator-system` to match the operator'
 kubectl apply -f config/daemonset.yaml
 ```
 
+## Data Path Modes
+
+The agent supports two deployment styles:
+
+- `hostPort` mode (default): listens on `0.0.0.0:5353` and exposes host ports.
+- `linkLocal` mode: listens on a node-local IP such as `169.254.20.11:5353`.
+
+Set this through `ASTRADNS_LISTEN_ADDR` (for example, `169.254.20.11:5353`).
+
+The Helm chart in `astradns-operator` wires these modes via `agent.network.mode` and `agent.network.linkLocalIP`.
+
 ## Development
 
 ```sh
@@ -85,6 +96,10 @@ make test
 make vet
 ```
 
+## Release
+
+Tagging with `vX.Y.Z` triggers the release workflow (`.github/workflows/release.yml`) which runs tests, vet, builds the binary, and publishes the artifact.
+
 ## Contribution Policy
 
 - Human and AI contributions: `CONTRIBUTING.md`
@@ -96,3 +111,5 @@ make vet
 ```sh
 docker build -f Dockerfile -t astradns-agent ..
 ```
+
+For production with multiple engines, build/publish one image per engine binary set and select the image in Helm using `agent.engineImages.<engine>`.
