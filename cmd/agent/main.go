@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/astradns/astradns-agent/pkg/diagnostics"
 	_ "github.com/astradns/astradns-agent/pkg/engine/coredns"
 	_ "github.com/astradns/astradns-agent/pkg/engine/powerdns"
 	_ "github.com/astradns/astradns-agent/pkg/engine/unbound"
@@ -70,6 +71,9 @@ const (
 	defaultTracingEndpoint                  = "localhost:4318"
 	defaultTracingInsecure                  = true
 	defaultTracingSampleRatio               = 0.1
+	defaultDiagnosticsEnabled               = false
+	defaultDiagnosticsInterval              = time.Minute
+	defaultDiagnosticsTimeout               = 3 * time.Second
 
 	defaultEngineRecoveryInterval = 5 * time.Second
 	defaultWorkerBuffer           = 10000
@@ -109,6 +113,10 @@ type runtimeConfig struct {
 	TracingInsecure        bool
 	TracingSampleRatio     float64
 	TracingServiceName     string
+	DiagnosticsEnabled     bool
+	DiagnosticsTargets     []string
+	DiagnosticsInterval    time.Duration
+	DiagnosticsTimeout     time.Duration
 	LogMode                logging.LogMode
 	LogSampleRate          float64
 }
@@ -239,6 +247,24 @@ func main() {
 	}, collector)
 	checker.CheckNow(ctx)
 
+	var diagnosticsRunner *diagnostics.Runner
+	if cfg.DiagnosticsEnabled && len(cfg.DiagnosticsTargets) > 0 {
+		diagnosticsRunner = diagnostics.NewRunner(diagnostics.Config{
+			Targets:      cfg.DiagnosticsTargets,
+			ResolverAddr: diagnosticsResolverAddress(cfg.ListenAddr),
+			Interval:     cfg.DiagnosticsInterval,
+			Timeout:      cfg.DiagnosticsTimeout,
+		}, logger)
+		logger.Info(
+			"diagnostics enabled",
+			"targets", cfg.DiagnosticsTargets,
+			"interval", cfg.DiagnosticsInterval,
+			"timeout", cfg.DiagnosticsTimeout,
+		)
+	} else if cfg.DiagnosticsEnabled {
+		logger.Warn("diagnostics enabled but no valid targets configured")
+	}
+
 	metricsEvents := make(chan proxy.QueryEvent, defaultWorkerBuffer)
 	loggerEvents := make(chan proxy.QueryEvent, defaultWorkerBuffer)
 
@@ -249,7 +275,7 @@ func main() {
 
 	healthServer := &http.Server{
 		Addr:    cfg.HealthAddr,
-		Handler: newHealthHandler(eng, checker),
+		Handler: newHealthHandler(eng, checker, diagnosticsRunner),
 	}
 
 	componentErrs := make(chan error, cfg.ComponentErrorBuffer)
@@ -283,6 +309,13 @@ func main() {
 		checker.Run(ctx)
 		return nil
 	})
+
+	if diagnosticsRunner != nil {
+		startComponent(&wg, componentErrs, onComponentErrDrop, "diagnostics", func() error {
+			diagnosticsRunner.Run(ctx)
+			return nil
+		})
+	}
 
 	startComponent(&wg, componentErrs, onComponentErrDrop, "metrics server", func() error {
 		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -867,6 +900,10 @@ func loadRuntimeConfig() runtimeConfig {
 		TracingInsecure:        getEnvBool("ASTRADNS_TRACING_INSECURE", defaultTracingInsecure),
 		TracingSampleRatio:     getEnvFloat("ASTRADNS_TRACING_SAMPLE_RATIO", defaultTracingSampleRatio),
 		TracingServiceName:     strings.TrimSpace(getEnv("ASTRADNS_TRACING_SERVICE_NAME", defaultTracingServiceName)),
+		DiagnosticsEnabled:     getEnvBool("ASTRADNS_DIAGNOSTICS_ENABLED", defaultDiagnosticsEnabled),
+		DiagnosticsTargets:     parseDiagnosticsTargets(getEnv("ASTRADNS_DIAGNOSTICS_TARGETS", "")),
+		DiagnosticsInterval:    getEnvDuration("ASTRADNS_DIAGNOSTICS_INTERVAL", defaultDiagnosticsInterval),
+		DiagnosticsTimeout:     getEnvDuration("ASTRADNS_DIAGNOSTICS_TIMEOUT", defaultDiagnosticsTimeout),
 		LogMode:                logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
 		LogSampleRate:          getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
 	}
@@ -1205,7 +1242,11 @@ func isAuthorizedMetricsRequest(r *http.Request, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(presentedToken), []byte(token)) == 1
 }
 
-func newHealthHandler(eng engine.Engine, checker *health.Checker) http.Handler {
+type diagnosticsSnapshotProvider interface {
+	Snapshot() diagnostics.Snapshot
+}
+
+func newHealthHandler(eng engine.Engine, checker *health.Checker, diagnosticsProvider diagnosticsSnapshotProvider) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -1243,7 +1284,67 @@ func newHealthHandler(eng engine.Engine, checker *health.Checker) http.Handler {
 		_, _ = w.Write([]byte("ready"))
 	})
 
+	mux.HandleFunc("/diagnostics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if diagnosticsProvider == nil {
+			_ = json.NewEncoder(w).Encode(struct {
+				Enabled bool   `json:"enabled"`
+				Message string `json:"message"`
+			}{
+				Enabled: false,
+				Message: "diagnostics disabled",
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(struct {
+			Enabled  bool                 `json:"enabled"`
+			Snapshot diagnostics.Snapshot `json:"snapshot"`
+		}{
+			Enabled:  true,
+			Snapshot: diagnosticsProvider.Snapshot(),
+		})
+	})
+
 	return mux
+}
+
+func parseDiagnosticsTargets(raw string) []string {
+	parts := strings.Split(raw, ",")
+	targets := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		target := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(part)), ".")
+		if target == "" || !isValidUpstreamAddress(target) {
+			continue
+		}
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
+	}
+
+	return targets
+}
+
+func diagnosticsResolverAddress(listenAddr string) string {
+	host, portText, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "127.0.0.1:5353"
+	}
+
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+
+	if _, err := strconv.Atoi(portText); err != nil {
+		portText = "5353"
+	}
+
+	return net.JoinHostPort(host, portText)
 }
 
 func fanOut(in <-chan proxy.QueryEvent, onDrop func(), outs ...chan<- proxy.QueryEvent) {

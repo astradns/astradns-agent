@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/astradns/astradns-agent/pkg/diagnostics"
 	"github.com/astradns/astradns-agent/pkg/health"
 	"github.com/astradns/astradns-types/engine"
 	"github.com/miekg/dns"
@@ -35,6 +37,14 @@ func (m *mockEngine) HealthCheck(ctx context.Context) (bool, error) {
 	return status.Healthy, err
 }
 
+type mockDiagnosticsProvider struct {
+	snapshot diagnostics.Snapshot
+}
+
+func (m *mockDiagnosticsProvider) Snapshot() diagnostics.Snapshot {
+	return m.snapshot
+}
+
 func TestHealthHandler_EngineHealthyAndUpstreamsHealthy(t *testing.T) {
 	eng := &mockEngine{
 		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
@@ -53,7 +63,7 @@ func TestHealthHandler_EngineHealthyAndUpstreamsHealthy(t *testing.T) {
 	}, nil)
 	checker.CheckNow(context.Background())
 
-	handler := newHealthHandler(eng, checker)
+	handler := newHealthHandler(eng, checker, nil)
 
 	t.Run("healthz_returns_200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -97,7 +107,7 @@ func TestHealthHandler_EngineHealthyNoHealthyUpstreams(t *testing.T) {
 		FailureThreshold: 3,
 	}, nil)
 
-	handler := newHealthHandler(eng, checker)
+	handler := newHealthHandler(eng, checker, nil)
 
 	t.Run("healthz_returns_200", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -140,7 +150,7 @@ func TestHealthHandler_EngineUnhealthy(t *testing.T) {
 		FailureThreshold: 3,
 	}, nil)
 
-	handler := newHealthHandler(eng, checker)
+	handler := newHealthHandler(eng, checker, nil)
 
 	t.Run("healthz_returns_503", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -183,7 +193,7 @@ func TestHealthHandler_EngineHealthCheckReturnsFalseWithoutError(t *testing.T) {
 		FailureThreshold: 3,
 	}, nil)
 
-	handler := newHealthHandler(eng, checker)
+	handler := newHealthHandler(eng, checker, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -191,6 +201,75 @@ func TestHealthHandler_EngineHealthCheckReturnsFalseWithoutError(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503 when HealthCheck returns false, got %d", rec.Code)
+	}
+}
+
+func TestHealthHandler_DiagnosticsDisabled(t *testing.T) {
+	eng := &mockEngine{
+		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
+			return engine.EngineHealthStatus{Healthy: true}, nil
+		},
+	}
+
+	handler := newHealthHandler(eng, health.NewChecker(health.CheckerConfig{}, nil), nil)
+	req := httptest.NewRequest(http.MethodGet, "/diagnostics", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Enabled bool   `json:"enabled"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode diagnostics response: %v", err)
+	}
+	if body.Enabled {
+		t.Fatal("expected diagnostics endpoint to be disabled")
+	}
+}
+
+func TestHealthHandler_DiagnosticsEnabled(t *testing.T) {
+	eng := &mockEngine{
+		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
+			return engine.EngineHealthStatus{Healthy: true}, nil
+		},
+	}
+
+	provider := &mockDiagnosticsProvider{snapshot: diagnostics.Snapshot{Results: []diagnostics.Result{{
+		Target:    "s3.us-west-004.backblazeb2.com",
+		Diagnosis: diagnostics.DiagnosisEgressBlockedOrNetwork,
+	}}}}
+
+	handler := newHealthHandler(eng, health.NewChecker(health.CheckerConfig{}, nil), provider)
+	req := httptest.NewRequest(http.MethodGet, "/diagnostics", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Enabled  bool                 `json:"enabled"`
+		Snapshot diagnostics.Snapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode diagnostics response: %v", err)
+	}
+	if !body.Enabled {
+		t.Fatal("expected diagnostics endpoint to be enabled")
+	}
+	if len(body.Snapshot.Results) != 1 {
+		t.Fatalf("expected one diagnostics result, got %d", len(body.Snapshot.Results))
+	}
+	if body.Snapshot.Results[0].Diagnosis != diagnostics.DiagnosisEgressBlockedOrNetwork {
+		t.Fatalf("unexpected diagnosis %q", body.Snapshot.Results[0].Diagnosis)
 	}
 }
 

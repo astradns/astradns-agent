@@ -23,6 +23,7 @@ The agent listens for DNS queries on port 5353 (UDP/TCP), forwards them to a bac
 | **Metrics** | Prometheus exporter (query counts, latency histograms, error rates) on `:9153` |
 | **Query Logger** | Structured JSON logging via `slog` with configurable sampling |
 | **Health Checker** | Liveness (`/healthz`) and readiness (`/readyz`) endpoints on `:8080` |
+| **Diagnostics** | Optional detailed diagnosis report (`/diagnostics`) for DNS vs egress vs TLS failure domains |
 | **Config Watcher** | Watches the ConfigMap mount for EngineConfig JSON changes and triggers engine reload |
 
 ## Supported Engines
@@ -71,6 +72,10 @@ The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADN
 | `ASTRADNS_ENGINE_RECOVERY_INTERVAL` | `5s` | Interval to probe engine responsiveness and auto-recover crashes |
 | `ASTRADNS_COMPONENT_ERROR_BUFFER` | `5` | Buffer size for component error channel before overflow drops |
 | `ASTRADNS_METRICS_BEARER_TOKEN` | `` | Optional bearer token required to access `/metrics` |
+| `ASTRADNS_DIAGNOSTICS_ENABLED` | `false` | Enable periodic external endpoint diagnostics and expose `/diagnostics` report |
+| `ASTRADNS_DIAGNOSTICS_TARGETS` | `` | Comma-separated list of hostnames to diagnose (e.g. `s3.us-west-004.backblazeb2.com`) |
+| `ASTRADNS_DIAGNOSTICS_INTERVAL` | `1m` | Interval between diagnostics probe cycles |
+| `ASTRADNS_DIAGNOSTICS_TIMEOUT` | `3s` | Timeout used by DNS/TCP/TLS/HTTPS probe steps |
 | `ASTRADNS_TRACING_ENABLED` | `false` | Enable OpenTelemetry trace export for control-plane operations |
 | `ASTRADNS_TRACING_ENDPOINT` | `localhost:4318` | OTLP/HTTP collector endpoint used when tracing is enabled |
 | `ASTRADNS_TRACING_INSECURE` | `true` | Use plaintext OTLP/HTTP transport to the collector endpoint |
@@ -78,6 +83,15 @@ The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADN
 | `ASTRADNS_TRACING_SERVICE_NAME` | `astradns-agent` | Service name reported in exported OpenTelemetry traces |
 | `ASTRADNS_LOG_MODE` | `sampled` | Query log mode (`full`, `sampled`, `errors-only`, `off`) |
 | `ASTRADNS_LOG_SAMPLE_RATE` | `0.1` | Fraction of queries to log when mode is `sampled` |
+
+### Diagnostics report
+
+When diagnostics are enabled, the health server exposes `GET /diagnostics` with a JSON report per target, including:
+
+- DNS resolution result and resolver rcode
+- TCP reachability to resolved endpoints on port 443
+- TLS handshake result with and without SNI
+- Best-effort classification (`healthy`, `dns_resolution_failed`, `egress_blocked_or_network`, `tls_handshake_failed`, `tls_sni_required`, `provider_block_suspected`)
 
 ## Container Image Notes
 

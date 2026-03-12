@@ -80,6 +80,14 @@ spec:
           value: "5s"
         - name: ASTRADNS_COMPONENT_ERROR_BUFFER
           value: "5"
+        - name: ASTRADNS_DIAGNOSTICS_ENABLED
+          value: "false"
+        - name: ASTRADNS_DIAGNOSTICS_TARGETS
+          value: ""
+        - name: ASTRADNS_DIAGNOSTICS_INTERVAL
+          value: "1m"
+        - name: ASTRADNS_DIAGNOSTICS_TIMEOUT
+          value: "3s"
         - name: ASTRADNS_TRACING_ENABLED
           value: "false"
         - name: ASTRADNS_TRACING_ENDPOINT

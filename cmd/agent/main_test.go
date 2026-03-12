@@ -520,6 +520,10 @@ func TestLoadRuntimeConfigProxyAndTracingOverrides(t *testing.T) {
 	t.Setenv("ASTRADNS_PROXY_CACHE_DEFAULT_TTL", "45s")
 	t.Setenv("ASTRADNS_ENGINE_CONN_POOL_SIZE", "32")
 	t.Setenv("ASTRADNS_METRICS_BEARER_TOKEN", "secret")
+	t.Setenv("ASTRADNS_DIAGNOSTICS_ENABLED", "true")
+	t.Setenv("ASTRADNS_DIAGNOSTICS_TARGETS", "s3.us-west-004.backblazeb2.com, dns.google")
+	t.Setenv("ASTRADNS_DIAGNOSTICS_INTERVAL", "2m")
+	t.Setenv("ASTRADNS_DIAGNOSTICS_TIMEOUT", "4s")
 	t.Setenv("ASTRADNS_TRACING_ENABLED", "true")
 	t.Setenv("ASTRADNS_TRACING_ENDPOINT", "otel-collector.monitoring.svc:4318")
 	t.Setenv("ASTRADNS_TRACING_INSECURE", "false")
@@ -539,6 +543,18 @@ func TestLoadRuntimeConfigProxyAndTracingOverrides(t *testing.T) {
 	if cfg.MetricsBearerToken != "secret" {
 		t.Fatalf("expected metrics bearer token to be loaded")
 	}
+	if !cfg.DiagnosticsEnabled {
+		t.Fatal("expected diagnostics to be enabled")
+	}
+	if len(cfg.DiagnosticsTargets) != 2 {
+		t.Fatalf("expected 2 diagnostics targets, got %d", len(cfg.DiagnosticsTargets))
+	}
+	if cfg.DiagnosticsInterval != 2*time.Minute {
+		t.Fatalf("expected diagnostics interval 2m, got %s", cfg.DiagnosticsInterval)
+	}
+	if cfg.DiagnosticsTimeout != 4*time.Second {
+		t.Fatalf("expected diagnostics timeout 4s, got %s", cfg.DiagnosticsTimeout)
+	}
 	if !cfg.TracingEnabled {
 		t.Fatal("expected tracing to be enabled")
 	}
@@ -553,6 +569,42 @@ func TestLoadRuntimeConfigProxyAndTracingOverrides(t *testing.T) {
 	}
 	if cfg.TracingServiceName != "astradns-agent-test" {
 		t.Fatalf("unexpected tracing service name %q", cfg.TracingServiceName)
+	}
+}
+
+func TestParseDiagnosticsTargets(t *testing.T) {
+	targets := parseDiagnosticsTargets(" s3.us-west-004.backblazeb2.com,invalid target,,DNS.GOOGLE.,1.1.1.1,s3.us-west-004.backblazeb2.com")
+	if len(targets) != 3 {
+		t.Fatalf("expected 3 valid diagnostics targets, got %d (%v)", len(targets), targets)
+	}
+	if targets[0] != "s3.us-west-004.backblazeb2.com" {
+		t.Fatalf("unexpected first target: %q", targets[0])
+	}
+	if targets[1] != "dns.google" {
+		t.Fatalf("unexpected second target: %q", targets[1])
+	}
+	if targets[2] != "1.1.1.1" {
+		t.Fatalf("unexpected third target: %q", targets[2])
+	}
+}
+
+func TestDiagnosticsResolverAddress(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		output string
+	}{
+		{name: "wildcard ipv4", input: "0.0.0.0:5353", output: "127.0.0.1:5353"},
+		{name: "explicit host", input: "169.254.20.11:5353", output: "169.254.20.11:5353"},
+		{name: "invalid value", input: "invalid", output: "127.0.0.1:5353"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := diagnosticsResolverAddress(tt.input); got != tt.output {
+				t.Fatalf("expected resolver address %q, got %q", tt.output, got)
+			}
+		})
 	}
 }
 
