@@ -27,3 +27,46 @@ jobs:
 
       - name: Build
         run: make build
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Integration tests
+        run: go test -tags=integration ./test/integration/...
+
+  e2e-kind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Create kind cluster
+        run: kind create cluster --name astradns-agent-e2e --wait 120s
+
+      - name: E2E tests
+        run: go test -tags=e2e ./test/e2e/...
+
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name astradns-agent-e2e
