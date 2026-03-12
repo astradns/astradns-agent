@@ -47,6 +47,7 @@ const (
 
 	rateLimitOverflowUpstream = "rate-limit"
 	cacheHitUpstreamLabel     = "proxy-cache"
+	cacheStaleUpstreamLabel   = "proxy-cache-stale"
 )
 
 // Proxy is a DNS proxy that intercepts queries and emits events.
@@ -264,6 +265,14 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 
 	response, err := p.pool.Exchange(exchangeCtx, networkForRemoteAddr(w.RemoteAddr()), request)
 	if err != nil || response == nil {
+		if p.cache != nil {
+			staleResponse, stale := p.cache.GetStale(request, start)
+			if stale {
+				_ = w.WriteMsg(staleResponse)
+				p.emitQueryEvent(start, srcIP, request, staleResponse, cacheStaleUpstreamLabel, true, true)
+				return
+			}
+		}
 		response = new(dns.Msg)
 		response.SetRcode(request, dns.RcodeServerFailure)
 	}

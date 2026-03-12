@@ -35,6 +35,7 @@ type Collector struct {
 	FanOutDroppedEventsTotal           prometheus.Counter
 	ComponentErrorBufferOverflowsTotal prometheus.Counter
 	DeniedQueriesTotal                 prometheus.Counter
+	StaleCacheServesTotal              prometheus.Counter
 }
 
 // NewCollector creates a Collector and registers all AstraDNS metrics.
@@ -130,6 +131,10 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 			Name: "astradns_denied_queries_total",
 			Help: "Total number of DNS queries denied by domain filter rules.",
 		}),
+		StaleCacheServesTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "astradns_stale_cache_serves_total",
+			Help: "Total number of stale cache entries served when the engine was unreachable.",
+		}),
 	}
 
 	registry.MustRegister(
@@ -154,6 +159,7 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 		c.FanOutDroppedEventsTotal,
 		c.ComponentErrorBufferOverflowsTotal,
 		c.DeniedQueriesTotal,
+		c.StaleCacheServesTotal,
 	)
 
 	c.AgentUp.Set(1)
@@ -175,6 +181,9 @@ func (c *Collector) ProcessEvent(event proxy.QueryEvent) {
 
 	if event.Denied {
 		c.DeniedQueriesTotal.Inc()
+	}
+	if upstream == "proxy-cache-stale" {
+		c.StaleCacheServesTotal.Inc()
 	}
 
 	if event.CacheHitKnown {
