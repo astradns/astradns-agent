@@ -52,6 +52,10 @@ spec:
           value: "/var/run/astradns/engine"
         - name: ASTRADNS_PROXY_TIMEOUT
           value: "2s"
+        - name: ASTRADNS_HEALTH_PROBE_DOMAIN
+          value: "."
+        - name: ASTRADNS_HEALTH_PROBE_TYPE
+          value: "NS"
         - name: ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_RPS
           value: "2000"
         - name: ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_BURST

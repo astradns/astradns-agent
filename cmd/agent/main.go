@@ -51,6 +51,8 @@ const (
 	defaultProxyPerSourceRateLimitBurst     = 400
 	defaultProxyPerSourceRateLimitStateTTL  = 5 * time.Minute
 	defaultProxyPerSourceRateLimitMaxSource = 10000
+	defaultHealthProbeDomain                = "."
+	defaultHealthProbeType                  = dns.TypeNS
 
 	defaultEngineRecoveryInterval = 5 * time.Second
 	defaultWorkerBuffer           = 10000
@@ -73,6 +75,8 @@ type runtimeConfig struct {
 	ProxyPerSourceRateLimitBurst    int
 	ProxyPerSourceRateLimitStateTTL time.Duration
 	ProxyPerSourceRateLimitMaxSrc   int
+	HealthProbeDomain               string
+	HealthProbeType                 uint16
 
 	EngineRecoveryInterval time.Duration
 	LogMode                logging.LogMode
@@ -146,6 +150,8 @@ func main() {
 		IntervalSeconds:  10,
 		TimeoutSeconds:   2,
 		FailureThreshold: 3,
+		ProbeDomain:      cfg.HealthProbeDomain,
+		ProbeType:        cfg.HealthProbeType,
 	}, collector)
 	checker.CheckNow(ctx)
 
@@ -565,6 +571,8 @@ func loadRuntimeConfig() runtimeConfig {
 		ProxyPerSourceRateLimitBurst:    getEnvPositiveInt("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_BURST", defaultProxyPerSourceRateLimitBurst),
 		ProxyPerSourceRateLimitStateTTL: getEnvDuration("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_STATE_TTL", defaultProxyPerSourceRateLimitStateTTL),
 		ProxyPerSourceRateLimitMaxSrc:   getEnvPositiveInt("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_MAX_SOURCES", defaultProxyPerSourceRateLimitMaxSource),
+		HealthProbeDomain:               getEnv("ASTRADNS_HEALTH_PROBE_DOMAIN", defaultHealthProbeDomain),
+		HealthProbeType:                 getEnvDNSQueryType("ASTRADNS_HEALTH_PROBE_TYPE", defaultHealthProbeType),
 
 		EngineRecoveryInterval: getEnvDuration("ASTRADNS_ENGINE_RECOVERY_INTERVAL", defaultEngineRecoveryInterval),
 		LogMode:                logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
@@ -630,6 +638,24 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func getEnvDNSQueryType(key string, fallback uint16) uint16 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	if parsedType, found := dns.StringToType[strings.ToUpper(value)]; found && parsedType != 0 {
+		return parsedType
+	}
+
+	parsedType, err := strconv.ParseUint(value, 10, 16)
+	if err != nil || parsedType == 0 {
+		return fallback
+	}
+
+	return uint16(parsedType)
 }
 
 func resolveConfigPaths(configPath string) (string, string) {

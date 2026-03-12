@@ -55,6 +55,8 @@ The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADN
 | `ASTRADNS_ENGINE_ADDR` | `127.0.0.1:5354` | Address of the engine subprocess |
 | `ASTRADNS_METRICS_ADDR` | `:9153` | Address for the Prometheus metrics endpoint |
 | `ASTRADNS_HEALTH_ADDR` | `:8080` | Address for the health check endpoint |
+| `ASTRADNS_HEALTH_PROBE_DOMAIN` | `.` | DNS name queried by upstream health checks |
+| `ASTRADNS_HEALTH_PROBE_TYPE` | `NS` | DNS record type used by upstream health checks (name like `A`/`NS` or numeric code) |
 | `ASTRADNS_PROXY_TIMEOUT` | `2s` | Per-query proxy timeout when forwarding to engine |
 | `ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_RPS` | `2000` | Global DNS query rate limit in requests per second |
 | `ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_BURST` | `4000` | Global token bucket burst for DNS query spikes |

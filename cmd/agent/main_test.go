@@ -11,6 +11,7 @@ import (
 
 	"github.com/astradns/astradns-agent/pkg/proxy"
 	"github.com/astradns/astradns-types/engine"
+	"github.com/miekg/dns"
 )
 
 func TestFanOutReportsDroppedEvents(t *testing.T) {
@@ -464,6 +465,41 @@ func TestGetEnvDuration(t *testing.T) {
 	t.Setenv("ASTRADNS_TEST_DURATION", "-2s")
 	if got := getEnvDuration("ASTRADNS_TEST_DURATION", time.Second); got != time.Second {
 		t.Fatalf("expected fallback for negative duration, got %v", got)
+	}
+}
+
+func TestGetEnvDNSQueryType(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_QUERY_TYPE", "aaaa")
+	if got := getEnvDNSQueryType("ASTRADNS_TEST_QUERY_TYPE", dns.TypeA); got != dns.TypeAAAA {
+		t.Fatalf("expected AAAA type, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_QUERY_TYPE", "15")
+	if got := getEnvDNSQueryType("ASTRADNS_TEST_QUERY_TYPE", dns.TypeA); got != dns.TypeMX {
+		t.Fatalf("expected MX type from numeric value, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_QUERY_TYPE", "0")
+	if got := getEnvDNSQueryType("ASTRADNS_TEST_QUERY_TYPE", dns.TypeA); got != dns.TypeA {
+		t.Fatalf("expected fallback for zero type, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_QUERY_TYPE", "not-a-type")
+	if got := getEnvDNSQueryType("ASTRADNS_TEST_QUERY_TYPE", dns.TypeA); got != dns.TypeA {
+		t.Fatalf("expected fallback for invalid type, got %d", got)
+	}
+}
+
+func TestLoadRuntimeConfigHealthProbeOverrides(t *testing.T) {
+	t.Setenv("ASTRADNS_HEALTH_PROBE_DOMAIN", "example.org")
+	t.Setenv("ASTRADNS_HEALTH_PROBE_TYPE", "TXT")
+
+	cfg := loadRuntimeConfig()
+	if cfg.HealthProbeDomain != "example.org" {
+		t.Fatalf("expected health probe domain override, got %q", cfg.HealthProbeDomain)
+	}
+	if cfg.HealthProbeType != dns.TypeTXT {
+		t.Fatalf("expected health probe type TXT (%d), got %d", dns.TypeTXT, cfg.HealthProbeType)
 	}
 }
 
