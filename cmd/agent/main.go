@@ -619,6 +619,11 @@ func loadEngineConfig(configFile, engineAddr string) (engine.EngineConfig, error
 	if len(cfg.Upstreams) == 0 {
 		cfg.Upstreams = defaults.Upstreams
 	}
+	for i := range cfg.Upstreams {
+		if cfg.Upstreams[i].Port == 0 {
+			cfg.Upstreams[i].Port = 53
+		}
+	}
 
 	if cfg.Cache.MaxEntries == 0 {
 		cfg.Cache = defaults.Cache

@@ -141,8 +141,8 @@ func TestLoadEngineConfig_PartialConfig_OnlyUpstreams(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "config.json")
 
-	// Only upstreams specified, no cache or listen fields.
-	partial := `{"upstreams": [{"address": "9.9.9.9", "port": 53}]}`
+	// Only upstreams specified (port omitted), no cache or listen fields.
+	partial := `{"upstreams": [{"address": "9.9.9.9"}]}`
 	if err := os.WriteFile(configFile, []byte(partial), 0644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
@@ -161,6 +161,9 @@ func TestLoadEngineConfig_PartialConfig_OnlyUpstreams(t *testing.T) {
 	}
 	if loaded.Upstreams[0].Address != "9.9.9.9" {
 		t.Fatalf("expected upstream address 9.9.9.9, got %q", loaded.Upstreams[0].Address)
+	}
+	if loaded.Upstreams[0].Port != defaults.Upstreams[0].Port {
+		t.Fatalf("expected default upstream port %d, got %d", defaults.Upstreams[0].Port, loaded.Upstreams[0].Port)
 	}
 
 	// Cache should fall back to defaults since MaxEntries == 0.
