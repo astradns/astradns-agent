@@ -82,7 +82,7 @@ func TestDNSReturnsServfailWhenUpstreamStops(t *testing.T) {
 
 	stopEngine()
 
-	servfail := queryDNS(t, "udp", listenAddr, "example.org.")
+	servfail := queryDNS(t, "udp", listenAddr, "after-stop.example.org.")
 	if servfail.Rcode != dns.RcodeServerFailure {
 		t.Fatalf("expected SERVFAIL after upstream stop, got rcode %d", servfail.Rcode)
 	}

@@ -61,6 +61,72 @@ func TestProxyForwardsQueriesAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestProxyCachesResponsesAndMarksCacheHits(t *testing.T) {
+	engineAddr, upstreamQueries, stopEngine := startCountingEngine(t)
+	defer stopEngine()
+
+	listenAddr := freeLocalAddr(t)
+	p := New(ProxyConfig{
+		ListenAddr:      listenAddr,
+		EngineAddr:      engineAddr,
+		EventChanSize:   8,
+		CacheMaxEntries: 16,
+		CacheDefaultTTL: 30 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Start(ctx)
+	}()
+
+	firstResponse := exchangeWithRetry(t, "udp", listenAddr, "cache.example.org.")
+	if firstResponse.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected first NOERROR response, got rcode %d", firstResponse.Rcode)
+	}
+
+	secondResponse := exchangeWithRetry(t, "udp", listenAddr, "cache.example.org.")
+	if secondResponse.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected second NOERROR response, got rcode %d", secondResponse.Rcode)
+	}
+
+	if got := upstreamQueries.Load(); got != 1 {
+		t.Fatalf("expected one upstream query due to cache hit, got %d", got)
+	}
+
+	firstEvent := awaitEvent(t, p.Events())
+	if !firstEvent.CacheHitKnown {
+		t.Fatal("expected first event to report known cache status")
+	}
+	if firstEvent.CacheHit {
+		t.Fatal("expected first event to be cache miss")
+	}
+	if firstEvent.Upstream != engineAddr {
+		t.Fatalf("expected first event upstream %q, got %q", engineAddr, firstEvent.Upstream)
+	}
+
+	secondEvent := awaitEvent(t, p.Events())
+	if !secondEvent.CacheHitKnown {
+		t.Fatal("expected second event to report known cache status")
+	}
+	if !secondEvent.CacheHit {
+		t.Fatal("expected second event to be cache hit")
+	}
+	if secondEvent.Upstream != cacheHitUpstreamLabel {
+		t.Fatalf("expected second event upstream %q, got %q", cacheHitUpstreamLabel, secondEvent.Upstream)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("unexpected proxy start error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not stop after context cancellation")
+	}
+}
+
 func TestProxyDropsEventsWhenChannelIsFull(t *testing.T) {
 	engineAddr, stopEngine := startTestEngine(t)
 	defer stopEngine()
@@ -294,6 +360,54 @@ func startTestEngine(t *testing.T) (string, func()) {
 	}
 
 	return tcpListener.Addr().String(), stop
+}
+
+func startCountingEngine(t *testing.T) (string, *atomic.Int64, func()) {
+	t.Helper()
+
+	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create tcp listener: %v", err)
+	}
+
+	addr := tcpListener.Addr().(*net.TCPAddr)
+	udpConn, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", addr.Port))
+	if err != nil {
+		_ = tcpListener.Close()
+		t.Fatalf("failed to create udp listener: %v", err)
+	}
+
+	upstreamQueries := &atomic.Int64{}
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		upstreamQueries.Add(1)
+
+		message := new(dns.Msg)
+		message.SetReply(r)
+		if len(r.Question) > 0 && r.Question[0].Qtype == dns.TypeA {
+			record, recordErr := dns.NewRR(fmt.Sprintf("%s 60 IN A 203.0.113.11", r.Question[0].Name))
+			if recordErr == nil {
+				message.Answer = append(message.Answer, record)
+			}
+		}
+		_ = w.WriteMsg(message)
+	})
+
+	udpServer := &dns.Server{PacketConn: udpConn, Net: "udp", Handler: handler}
+	tcpServer := &dns.Server{Listener: tcpListener, Net: "tcp", Handler: handler}
+
+	go func() {
+		_ = udpServer.ActivateAndServe()
+	}()
+	go func() {
+		_ = tcpServer.ActivateAndServe()
+	}()
+
+	stop := func() {
+		_ = udpServer.Shutdown()
+		_ = tcpServer.Shutdown()
+	}
+
+	return tcpListener.Addr().String(), upstreamQueries, stop
 }
 
 func freeLocalAddr(t *testing.T) string {

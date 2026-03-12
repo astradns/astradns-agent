@@ -19,6 +19,8 @@ type ProxyConfig struct {
 	EngineAddr                   string
 	QueryTimeout                 time.Duration
 	EventChanSize                int
+	CacheMaxEntries              int
+	CacheDefaultTTL              time.Duration
 	OnEventDrop                  func()
 	GlobalRateLimitRPS           float64
 	GlobalRateLimitBurst         int
@@ -35,8 +37,11 @@ const (
 	defaultPerSourceRateLimitBurst      = 400
 	defaultPerSourceRateLimitStateTTL   = 5 * time.Minute
 	defaultPerSourceRateLimitMaxSources = 10000
+	defaultProxyCacheMaxEntries         = 10000
+	defaultProxyCacheTTL                = 30 * time.Second
 
 	rateLimitOverflowUpstream = "rate-limit"
+	cacheHitUpstreamLabel     = "proxy-cache"
 )
 
 // Proxy is a DNS proxy that intercepts queries and emits events.
@@ -45,6 +50,7 @@ type Proxy struct {
 	events  chan QueryEvent
 	dropped atomic.Int64
 	limiter *requestLimiter
+	cache   *responseCache
 	now     func() time.Time
 
 	mu       sync.Mutex
@@ -68,6 +74,12 @@ func New(config ProxyConfig) *Proxy {
 	if config.EventChanSize <= 0 {
 		config.EventChanSize = 10000
 	}
+	if config.CacheMaxEntries <= 0 {
+		config.CacheMaxEntries = defaultProxyCacheMaxEntries
+	}
+	if config.CacheDefaultTTL <= 0 {
+		config.CacheDefaultTTL = defaultProxyCacheTTL
+	}
 	if config.GlobalRateLimitRPS <= 0 {
 		config.GlobalRateLimitRPS = defaultGlobalRateLimitRPS
 	}
@@ -88,11 +100,13 @@ func New(config ProxyConfig) *Proxy {
 	}
 
 	limiter := newRequestLimiter(config)
+	cache := newResponseCache(config.CacheMaxEntries, config.CacheDefaultTTL)
 
 	return &Proxy{
 		config:  config,
 		events:  make(chan QueryEvent, config.EventChanSize),
 		limiter: limiter,
+		cache:   cache,
 		now:     time.Now,
 	}
 }
@@ -179,9 +193,18 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 		response.SetRcode(request, dns.RcodeRefused)
 
 		_ = w.WriteMsg(response)
-		p.emitQueryEvent(start, srcIP, request, response, rateLimitOverflowUpstream)
+		p.emitQueryEvent(start, srcIP, request, response, rateLimitOverflowUpstream, false, false)
 
 		return
+	}
+
+	if p.cache != nil {
+		cachedResponse, cached := p.cache.Get(request, start)
+		if cached {
+			_ = w.WriteMsg(cachedResponse)
+			p.emitQueryEvent(start, srcIP, request, cachedResponse, cacheHitUpstreamLabel, true, true)
+			return
+		}
 	}
 
 	client := &dns.Client{Net: networkForRemoteAddr(w.RemoteAddr()), Timeout: p.config.QueryTimeout}
@@ -192,11 +215,23 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 		response.SetRcode(request, dns.RcodeServerFailure)
 	}
 
+	if p.cache != nil {
+		p.cache.Store(request, response, start)
+	}
+
 	_ = w.WriteMsg(response)
-	p.emitQueryEvent(start, srcIP, request, response, p.config.EngineAddr)
+	p.emitQueryEvent(start, srcIP, request, response, p.config.EngineAddr, true, false)
 }
 
-func (p *Proxy) emitQueryEvent(start time.Time, srcIP string, request, response *dns.Msg, upstream string) {
+func (p *Proxy) emitQueryEvent(
+	start time.Time,
+	srcIP string,
+	request,
+	response *dns.Msg,
+	upstream string,
+	cacheHitKnown,
+	cacheHit bool,
+) {
 	latencyMs := float64(p.now().Sub(start).Microseconds()) / 1000.0
 
 	event := QueryEvent{
@@ -207,8 +242,8 @@ func (p *Proxy) emitQueryEvent(start time.Time, srcIP string, request, response 
 		ResponseCode:  responseCode(response),
 		Upstream:      upstream,
 		LatencyMs:     latencyMs,
-		CacheHitKnown: false,
-		CacheHit:      false,
+		CacheHitKnown: cacheHitKnown,
+		CacheHit:      cacheHit,
 	}
 	p.publishEvent(event)
 }
