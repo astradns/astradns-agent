@@ -489,6 +489,50 @@ func TestGetEnvFloat(t *testing.T) {
 	}
 }
 
+func TestGetEnvPositiveFloat(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_POS_FLOAT", "2.5")
+	if got := getEnvPositiveFloat("ASTRADNS_TEST_POS_FLOAT", 1.0); got != 2.5 {
+		t.Fatalf("expected 2.5, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_POS_FLOAT", "0")
+	if got := getEnvPositiveFloat("ASTRADNS_TEST_POS_FLOAT", 1.0); got != 1.0 {
+		t.Fatalf("expected fallback 1.0 for zero, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_POS_FLOAT", "-3")
+	if got := getEnvPositiveFloat("ASTRADNS_TEST_POS_FLOAT", 1.0); got != 1.0 {
+		t.Fatalf("expected fallback 1.0 for negative, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_POS_FLOAT", "NaN")
+	if got := getEnvPositiveFloat("ASTRADNS_TEST_POS_FLOAT", 1.0); got != 1.0 {
+		t.Fatalf("expected fallback 1.0 for NaN, got %v", got)
+	}
+}
+
+func TestGetEnvPositiveInt(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_POS_INT", "42")
+	if got := getEnvPositiveInt("ASTRADNS_TEST_POS_INT", 10); got != 42 {
+		t.Fatalf("expected 42, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_POS_INT", "0")
+	if got := getEnvPositiveInt("ASTRADNS_TEST_POS_INT", 10); got != 10 {
+		t.Fatalf("expected fallback 10 for zero, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_POS_INT", "-5")
+	if got := getEnvPositiveInt("ASTRADNS_TEST_POS_INT", 10); got != 10 {
+		t.Fatalf("expected fallback 10 for negative, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_POS_INT", "not-an-int")
+	if got := getEnvPositiveInt("ASTRADNS_TEST_POS_INT", 10); got != 10 {
+		t.Fatalf("expected fallback 10 for invalid value, got %d", got)
+	}
+}
+
 func TestValidateEngineConfig(t *testing.T) {
 	valid := defaultEngineConfig("127.0.0.1:5354")
 	if err := validateEngineConfig(valid); err != nil {

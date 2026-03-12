@@ -45,6 +45,13 @@ const (
 	defaultLogSample    = 0.1
 	defaultProxyTimeout = 2 * time.Second
 
+	defaultProxyGlobalRateLimitRPS          = 2000
+	defaultProxyGlobalRateLimitBurst        = 4000
+	defaultProxyPerSourceRateLimitRPS       = 200
+	defaultProxyPerSourceRateLimitBurst     = 400
+	defaultProxyPerSourceRateLimitStateTTL  = 5 * time.Minute
+	defaultProxyPerSourceRateLimitMaxSource = 10000
+
 	defaultEngineRecoveryInterval = 5 * time.Second
 	defaultWorkerBuffer           = 10000
 )
@@ -59,6 +66,13 @@ type runtimeConfig struct {
 	ConfigFile      string
 	EngineConfigDir string
 	ProxyTimeout    time.Duration
+
+	ProxyGlobalRateLimitRPS         float64
+	ProxyGlobalRateLimitBurst       int
+	ProxyPerSourceRateLimitRPS      float64
+	ProxyPerSourceRateLimitBurst    int
+	ProxyPerSourceRateLimitStateTTL time.Duration
+	ProxyPerSourceRateLimitMaxSrc   int
 
 	EngineRecoveryInterval time.Duration
 	LogMode                logging.LogMode
@@ -109,10 +123,16 @@ func main() {
 	})
 
 	proxyInstance := proxy.New(proxy.ProxyConfig{
-		ListenAddr:    cfg.ListenAddr,
-		EngineAddr:    cfg.EngineAddr,
-		QueryTimeout:  cfg.ProxyTimeout,
-		EventChanSize: defaultWorkerBuffer,
+		ListenAddr:                   cfg.ListenAddr,
+		EngineAddr:                   cfg.EngineAddr,
+		QueryTimeout:                 cfg.ProxyTimeout,
+		EventChanSize:                defaultWorkerBuffer,
+		GlobalRateLimitRPS:           cfg.ProxyGlobalRateLimitRPS,
+		GlobalRateLimitBurst:         cfg.ProxyGlobalRateLimitBurst,
+		PerSourceRateLimitRPS:        cfg.ProxyPerSourceRateLimitRPS,
+		PerSourceRateLimitBurst:      cfg.ProxyPerSourceRateLimitBurst,
+		PerSourceRateLimitStateTTL:   cfg.ProxyPerSourceRateLimitStateTTL,
+		PerSourceRateLimitMaxSources: cfg.ProxyPerSourceRateLimitMaxSrc,
 		OnEventDrop: func() {
 			collector.ProxyDroppedEventsTotal.Inc()
 		},
@@ -539,6 +559,13 @@ func loadRuntimeConfig() runtimeConfig {
 		EngineConfigDir: getEnv("ASTRADNS_ENGINE_CONFIG_DIR", defaultEngineCfgDir),
 		ProxyTimeout:    getEnvDuration("ASTRADNS_PROXY_TIMEOUT", defaultProxyTimeout),
 
+		ProxyGlobalRateLimitRPS:         getEnvPositiveFloat("ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_RPS", defaultProxyGlobalRateLimitRPS),
+		ProxyGlobalRateLimitBurst:       getEnvPositiveInt("ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_BURST", defaultProxyGlobalRateLimitBurst),
+		ProxyPerSourceRateLimitRPS:      getEnvPositiveFloat("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_RPS", defaultProxyPerSourceRateLimitRPS),
+		ProxyPerSourceRateLimitBurst:    getEnvPositiveInt("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_BURST", defaultProxyPerSourceRateLimitBurst),
+		ProxyPerSourceRateLimitStateTTL: getEnvDuration("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_STATE_TTL", defaultProxyPerSourceRateLimitStateTTL),
+		ProxyPerSourceRateLimitMaxSrc:   getEnvPositiveInt("ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_MAX_SOURCES", defaultProxyPerSourceRateLimitMaxSource),
+
 		EngineRecoveryInterval: getEnvDuration("ASTRADNS_ENGINE_RECOVERY_INTERVAL", defaultEngineRecoveryInterval),
 		LogMode:                logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
 		LogSampleRate:          getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
@@ -562,6 +589,34 @@ func getEnvFloat(key string, fallback float64) float64 {
 	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
 		return fallback
 	}
+	return parsed
+}
+
+func getEnvPositiveFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed <= 0 {
+		return fallback
+	}
+
+	return parsed
+}
+
+func getEnvPositiveInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+
 	return parsed
 }
 

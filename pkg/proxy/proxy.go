@@ -15,18 +15,37 @@ import (
 
 // ProxyConfig holds configuration for the DNS proxy.
 type ProxyConfig struct {
-	ListenAddr    string
-	EngineAddr    string
-	QueryTimeout  time.Duration
-	EventChanSize int
-	OnEventDrop   func()
+	ListenAddr                   string
+	EngineAddr                   string
+	QueryTimeout                 time.Duration
+	EventChanSize                int
+	OnEventDrop                  func()
+	GlobalRateLimitRPS           float64
+	GlobalRateLimitBurst         int
+	PerSourceRateLimitRPS        float64
+	PerSourceRateLimitBurst      int
+	PerSourceRateLimitStateTTL   time.Duration
+	PerSourceRateLimitMaxSources int
 }
+
+const (
+	defaultGlobalRateLimitRPS           = 2000
+	defaultGlobalRateLimitBurst         = 4000
+	defaultPerSourceRateLimitRPS        = 200
+	defaultPerSourceRateLimitBurst      = 400
+	defaultPerSourceRateLimitStateTTL   = 5 * time.Minute
+	defaultPerSourceRateLimitMaxSources = 10000
+
+	rateLimitOverflowUpstream = "rate-limit"
+)
 
 // Proxy is a DNS proxy that intercepts queries and emits events.
 type Proxy struct {
 	config  ProxyConfig
 	events  chan QueryEvent
 	dropped atomic.Int64
+	limiter *requestLimiter
+	now     func() time.Time
 
 	mu       sync.Mutex
 	udp      *dns.Server
@@ -49,10 +68,32 @@ func New(config ProxyConfig) *Proxy {
 	if config.EventChanSize <= 0 {
 		config.EventChanSize = 10000
 	}
+	if config.GlobalRateLimitRPS <= 0 {
+		config.GlobalRateLimitRPS = defaultGlobalRateLimitRPS
+	}
+	if config.GlobalRateLimitBurst <= 0 {
+		config.GlobalRateLimitBurst = defaultGlobalRateLimitBurst
+	}
+	if config.PerSourceRateLimitRPS <= 0 {
+		config.PerSourceRateLimitRPS = defaultPerSourceRateLimitRPS
+	}
+	if config.PerSourceRateLimitBurst <= 0 {
+		config.PerSourceRateLimitBurst = defaultPerSourceRateLimitBurst
+	}
+	if config.PerSourceRateLimitStateTTL <= 0 {
+		config.PerSourceRateLimitStateTTL = defaultPerSourceRateLimitStateTTL
+	}
+	if config.PerSourceRateLimitMaxSources <= 0 {
+		config.PerSourceRateLimitMaxSources = defaultPerSourceRateLimitMaxSources
+	}
+
+	limiter := newRequestLimiter(config)
 
 	return &Proxy{
-		config: config,
-		events: make(chan QueryEvent, config.EventChanSize),
+		config:  config,
+		events:  make(chan QueryEvent, config.EventChanSize),
+		limiter: limiter,
+		now:     time.Now,
 	}
 }
 
@@ -130,7 +171,19 @@ func (p *Proxy) Stop() {
 }
 
 func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
-	start := time.Now()
+	start := p.now()
+	srcIP := sourceIP(w.RemoteAddr())
+
+	if p.limiter != nil && !p.limiter.Allow(srcIP, start) {
+		response := new(dns.Msg)
+		response.SetRcode(request, dns.RcodeRefused)
+
+		_ = w.WriteMsg(response)
+		p.emitQueryEvent(start, srcIP, request, response, rateLimitOverflowUpstream)
+
+		return
+	}
+
 	client := &dns.Client{Net: networkForRemoteAddr(w.RemoteAddr()), Timeout: p.config.QueryTimeout}
 
 	response, _, err := client.Exchange(request.Copy(), p.config.EngineAddr)
@@ -140,21 +193,27 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 	}
 
 	_ = w.WriteMsg(response)
+	p.emitQueryEvent(start, srcIP, request, response, p.config.EngineAddr)
+}
 
-	latencyMs := float64(time.Since(start).Microseconds()) / 1000.0
+func (p *Proxy) emitQueryEvent(start time.Time, srcIP string, request, response *dns.Msg, upstream string) {
+	latencyMs := float64(p.now().Sub(start).Microseconds()) / 1000.0
 
 	event := QueryEvent{
 		Timestamp:     start,
-		SourceIP:      sourceIP(w.RemoteAddr()),
+		SourceIP:      srcIP,
 		Domain:        normalizeDomain(request),
 		QueryType:     queryType(request),
 		ResponseCode:  responseCode(response),
-		Upstream:      p.config.EngineAddr,
+		Upstream:      upstream,
 		LatencyMs:     latencyMs,
 		CacheHitKnown: false,
 		CacheHit:      false,
 	}
+	p.publishEvent(event)
+}
 
+func (p *Proxy) publishEvent(event QueryEvent) {
 	select {
 	case p.events <- event:
 	default:
@@ -163,6 +222,156 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 			p.config.OnEventDrop()
 		}
 	}
+}
+
+type requestLimiter struct {
+	global *tokenBucket
+
+	perSourceRate  float64
+	perSourceBurst int
+	stateTTL       time.Duration
+	maxSources     int
+	overflow       *tokenBucket
+
+	mu           sync.Mutex
+	perSource    map[string]*perSourceLimiter
+	requestCount uint64
+}
+
+type perSourceLimiter struct {
+	bucket   *tokenBucket
+	lastSeen time.Time
+}
+
+func newRequestLimiter(config ProxyConfig) *requestLimiter {
+	now := time.Now()
+	globalLimiter := newTokenBucket(config.GlobalRateLimitRPS, config.GlobalRateLimitBurst, now)
+	perSourceOverflow := newTokenBucket(config.PerSourceRateLimitRPS, config.PerSourceRateLimitBurst, now)
+	if globalLimiter == nil && perSourceOverflow == nil {
+		return nil
+	}
+
+	r := &requestLimiter{global: globalLimiter}
+	if perSourceOverflow != nil {
+		r.perSourceRate = config.PerSourceRateLimitRPS
+		r.perSourceBurst = config.PerSourceRateLimitBurst
+		r.stateTTL = config.PerSourceRateLimitStateTTL
+		r.maxSources = config.PerSourceRateLimitMaxSources
+		r.overflow = perSourceOverflow
+		r.perSource = make(map[string]*perSourceLimiter)
+	}
+
+	return r
+}
+
+func (r *requestLimiter) Allow(source string, now time.Time) bool {
+	if r == nil {
+		return true
+	}
+	if r.global != nil && !r.global.Allow(now) {
+		return false
+	}
+	if r.perSource == nil {
+		return true
+	}
+
+	bucket := r.lookupPerSourceBucket(source, now)
+	return bucket.Allow(now)
+}
+
+func (r *requestLimiter) lookupPerSourceBucket(source string, now time.Time) *tokenBucket {
+	key := source
+	if key == "" {
+		key = "unknown"
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.requestCount++
+	if r.requestCount%256 == 0 {
+		r.cleanupExpiredLocked(now)
+	}
+
+	if existing, ok := r.perSource[key]; ok {
+		existing.lastSeen = now
+		return existing.bucket
+	}
+
+	if len(r.perSource) >= r.maxSources {
+		r.cleanupExpiredLocked(now)
+		if len(r.perSource) >= r.maxSources {
+			return r.overflow
+		}
+	}
+
+	bucket := newTokenBucket(r.perSourceRate, r.perSourceBurst, now)
+	if bucket == nil {
+		return r.overflow
+	}
+
+	r.perSource[key] = &perSourceLimiter{bucket: bucket, lastSeen: now}
+	return bucket
+}
+
+func (r *requestLimiter) cleanupExpiredLocked(now time.Time) {
+	if r.stateTTL <= 0 {
+		return
+	}
+
+	for key, entry := range r.perSource {
+		if now.Sub(entry.lastSeen) > r.stateTTL {
+			delete(r.perSource, key)
+		}
+	}
+}
+
+type tokenBucket struct {
+	rate float64
+
+	mu         sync.Mutex
+	burst      float64
+	tokens     float64
+	lastRefill time.Time
+}
+
+func newTokenBucket(rateLimitRPS float64, burst int, now time.Time) *tokenBucket {
+	if rateLimitRPS <= 0 || burst <= 0 {
+		return nil
+	}
+
+	burstFloat := float64(burst)
+	return &tokenBucket{
+		rate:       rateLimitRPS,
+		burst:      burstFloat,
+		tokens:     burstFloat,
+		lastRefill: now,
+	}
+}
+
+func (b *tokenBucket) Allow(now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if now.Before(b.lastRefill) {
+		b.lastRefill = now
+	}
+
+	elapsedSeconds := now.Sub(b.lastRefill).Seconds()
+	if elapsedSeconds > 0 {
+		b.tokens += elapsedSeconds * b.rate
+		if b.tokens > b.burst {
+			b.tokens = b.burst
+		}
+		b.lastRefill = now
+	}
+
+	if b.tokens < 1 {
+		return false
+	}
+
+	b.tokens--
+	return true
 }
 
 func queryType(request *dns.Msg) string {

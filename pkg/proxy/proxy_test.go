@@ -144,6 +144,113 @@ func TestProxySupportsTCPQueries(t *testing.T) {
 	}
 }
 
+func TestProxyRateLimitsPerSourceQueries(t *testing.T) {
+	engineAddr, stopEngine := startTestEngine(t)
+	defer stopEngine()
+
+	listenAddr := freeLocalAddr(t)
+	p := New(ProxyConfig{
+		ListenAddr:                   listenAddr,
+		EngineAddr:                   engineAddr,
+		EventChanSize:                8,
+		GlobalRateLimitRPS:           1000,
+		GlobalRateLimitBurst:         1000,
+		PerSourceRateLimitRPS:        1,
+		PerSourceRateLimitBurst:      1,
+		PerSourceRateLimitStateTTL:   time.Minute,
+		PerSourceRateLimitMaxSources: 100,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Start(ctx)
+	}()
+
+	response := exchangeWithRetry(t, "udp", listenAddr, "example.org.")
+	if response.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected NOERROR response, got rcode %d", response.Rcode)
+	}
+
+	response = exchangeWithRetry(t, "udp", listenAddr, "example.org.")
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("expected REFUSED response due to rate limit, got rcode %d", response.Rcode)
+	}
+
+	first := awaitEvent(t, p.Events())
+	if first.ResponseCode != "NOERROR" {
+		t.Fatalf("expected first event response code NOERROR, got %q", first.ResponseCode)
+	}
+
+	second := awaitEvent(t, p.Events())
+	if second.ResponseCode != "REFUSED" {
+		t.Fatalf("expected second event response code REFUSED, got %q", second.ResponseCode)
+	}
+	if second.Upstream != rateLimitOverflowUpstream {
+		t.Fatalf("expected second event upstream %q, got %q", rateLimitOverflowUpstream, second.Upstream)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	response = exchangeWithRetry(t, "udp", listenAddr, "example.org.")
+	if response.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected NOERROR response after limiter refill, got rcode %d", response.Rcode)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("unexpected proxy start error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not stop after context cancellation")
+	}
+}
+
+func TestProxyRateLimitsGlobally(t *testing.T) {
+	engineAddr, stopEngine := startTestEngine(t)
+	defer stopEngine()
+
+	listenAddr := freeLocalAddr(t)
+	p := New(ProxyConfig{
+		ListenAddr:                   listenAddr,
+		EngineAddr:                   engineAddr,
+		EventChanSize:                8,
+		GlobalRateLimitRPS:           1,
+		GlobalRateLimitBurst:         1,
+		PerSourceRateLimitRPS:        1000,
+		PerSourceRateLimitBurst:      1000,
+		PerSourceRateLimitStateTTL:   time.Minute,
+		PerSourceRateLimitMaxSources: 100,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Start(ctx)
+	}()
+
+	response := exchangeWithRetry(t, "udp", listenAddr, "example.org.")
+	if response.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected NOERROR response, got rcode %d", response.Rcode)
+	}
+
+	response = exchangeWithRetry(t, "udp", listenAddr, "example.org.")
+	if response.Rcode != dns.RcodeRefused {
+		t.Fatalf("expected REFUSED response due to global rate limit, got rcode %d", response.Rcode)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("unexpected proxy start error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not stop after context cancellation")
+	}
+}
+
 func startTestEngine(t *testing.T) (string, func()) {
 	t.Helper()
 
@@ -336,4 +443,17 @@ func exchangeWithRetry(t *testing.T, network, addr, domain string) *dns.Msg {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func awaitEvent(t *testing.T, events <-chan QueryEvent) QueryEvent {
+	t.Helper()
+
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for query event")
+	}
+
+	return QueryEvent{}
 }

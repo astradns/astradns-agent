@@ -56,6 +56,12 @@ The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADN
 | `ASTRADNS_METRICS_ADDR` | `:9153` | Address for the Prometheus metrics endpoint |
 | `ASTRADNS_HEALTH_ADDR` | `:8080` | Address for the health check endpoint |
 | `ASTRADNS_PROXY_TIMEOUT` | `2s` | Per-query proxy timeout when forwarding to engine |
+| `ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_RPS` | `2000` | Global DNS query rate limit in requests per second |
+| `ASTRADNS_PROXY_RATE_LIMIT_GLOBAL_BURST` | `4000` | Global token bucket burst for DNS query spikes |
+| `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_RPS` | `200` | Per-source DNS query rate limit in requests per second |
+| `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_BURST` | `400` | Per-source token bucket burst for short spikes |
+| `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_STATE_TTL` | `5m` | Retention time for per-source limiter state before cleanup |
+| `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_MAX_SOURCES` | `10000` | Max source IPs tracked for per-source limiting |
 | `ASTRADNS_ENGINE_RECOVERY_INTERVAL` | `5s` | Interval to probe engine responsiveness and auto-recover crashes |
 | `ASTRADNS_LOG_MODE` | `sampled` | Query log mode (`full`, `sampled`, `errors-only`, `off`) |
 | `ASTRADNS_LOG_SAMPLE_RATE` | `0.1` | Fraction of queries to log when mode is `sampled` |
