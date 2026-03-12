@@ -270,6 +270,54 @@ func TestCheckerContextCancellationDuringHealthCheck(t *testing.T) {
 	}
 }
 
+func TestCheckerUpdateUpstreamsReplacesTargets(t *testing.T) {
+	oldHost, oldPort, oldResponsive, oldStop := startToggleUpstream(t)
+	defer oldStop()
+	oldResponsive.Store(true)
+
+	newHost, newPort, newResponsive, newStop := startToggleUpstream(t)
+	defer newStop()
+	newResponsive.Store(false)
+
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams:        []UpstreamTarget{{Address: oldHost, Port: oldPort}},
+		IntervalSeconds:  30,
+		TimeoutSeconds:   1,
+		FailureThreshold: 1,
+	}, collector)
+
+	checker.CheckNow(context.Background())
+
+	oldLabel := fmt.Sprintf("%s:%d", oldHost, oldPort)
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(oldLabel)); got != 1 {
+		t.Fatalf("expected old upstream gauge = 1 before update, got %v", got)
+	}
+	if !checker.HasHealthyUpstream() {
+		t.Fatal("expected checker to report healthy upstream before update")
+	}
+
+	checker.UpdateUpstreams([]UpstreamTarget{{Address: newHost, Port: newPort}})
+
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(oldLabel)); got != 0 {
+		t.Fatalf("expected old upstream gauge = 0 after update, got %v", got)
+	}
+	if checker.HasHealthyUpstream() {
+		t.Fatal("expected checker to report no healthy upstreams immediately after replacing targets")
+	}
+
+	newResponsive.Store(true)
+	checker.CheckNow(context.Background())
+
+	newLabel := fmt.Sprintf("%s:%d", newHost, newPort)
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(newLabel)); got != 1 {
+		t.Fatalf("expected new upstream gauge = 1 after check, got %v", got)
+	}
+	if !checker.HasHealthyUpstream() {
+		t.Fatal("expected checker to report healthy upstream after update + check")
+	}
+}
+
 func startToggleUpstream(t *testing.T) (string, int, *atomic.Bool, func()) {
 	t.Helper()
 

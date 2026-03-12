@@ -88,6 +88,57 @@ func (c *Checker) CheckNow(ctx context.Context) {
 	c.checkAll(ctx)
 }
 
+// UpdateUpstreams replaces the current upstream target set used by the checker.
+func (c *Checker) UpdateUpstreams(upstreams []UpstreamTarget) {
+	labels := make(map[string]struct{}, len(upstreams))
+	normalized := make([]UpstreamTarget, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		if upstream.Port == 0 {
+			upstream.Port = 53
+		}
+		label := upstreamLabel(upstream)
+		if _, exists := labels[label]; exists {
+			continue
+		}
+		labels[label] = struct{}{}
+		normalized = append(normalized, upstream)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.config.Upstreams = normalized
+
+	for label := range c.failureCounts {
+		if _, keep := labels[label]; !keep {
+			delete(c.failureCounts, label)
+		}
+	}
+
+	for label := range c.healthy {
+		if _, keep := labels[label]; keep {
+			continue
+		}
+		delete(c.healthy, label)
+		if c.metrics != nil {
+			c.metrics.UpstreamHealthy.WithLabelValues(label).Set(0)
+		}
+	}
+
+	for _, upstream := range normalized {
+		label := upstreamLabel(upstream)
+		if _, exists := c.failureCounts[label]; !exists {
+			c.failureCounts[label] = 0
+		}
+		if _, exists := c.healthy[label]; !exists {
+			c.healthy[label] = false
+			if c.metrics != nil {
+				c.metrics.UpstreamHealthy.WithLabelValues(label).Set(0)
+			}
+		}
+	}
+}
+
 // HasHealthyUpstream reports whether at least one upstream is currently healthy.
 func (c *Checker) HasHealthyUpstream() bool {
 	c.mu.RLock()
@@ -102,12 +153,22 @@ func (c *Checker) HasHealthyUpstream() bool {
 }
 
 func (c *Checker) checkAll(ctx context.Context) {
-	for _, upstream := range c.config.Upstreams {
+	for _, upstream := range c.currentUpstreams() {
 		if ctx.Err() != nil {
 			return
 		}
 		c.checkUpstream(ctx, upstream)
 	}
+}
+
+func (c *Checker) currentUpstreams() []UpstreamTarget {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	upstreams := make([]UpstreamTarget, len(c.config.Upstreams))
+	copy(upstreams, c.config.Upstreams)
+
+	return upstreams
 }
 
 func (c *Checker) checkUpstream(ctx context.Context, upstream UpstreamTarget) {

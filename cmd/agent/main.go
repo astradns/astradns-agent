@@ -117,10 +117,7 @@ func main() {
 	})
 	currentConfig := engineConfig
 
-	upstreams := make([]health.UpstreamTarget, 0, len(engineConfig.Upstreams))
-	for _, upstream := range engineConfig.Upstreams {
-		upstreams = append(upstreams, health.UpstreamTarget{Address: upstream.Address, Port: int(upstream.Port)})
-	}
+	upstreams := upstreamTargetsFromConfig(engineConfig)
 
 	checker := health.NewChecker(health.CheckerConfig{
 		Upstreams:        upstreams,
@@ -214,6 +211,9 @@ func main() {
 				}
 				return fmt.Errorf("reload engine: %w (rolled back)", err)
 			}
+
+			checker.UpdateUpstreams(upstreamTargetsFromConfig(newConfig))
+			checker.CheckNow(ctx)
 			currentConfig = newConfig
 			collector.AgentConfigReloadTotal.Inc()
 			logger.Info("engine config reloaded successfully")
@@ -565,6 +565,15 @@ func splitHostPort(addr, defaultHost string, defaultPort int) (string, int) {
 		host = defaultHost
 	}
 	return host, port
+}
+
+func upstreamTargetsFromConfig(cfg engine.EngineConfig) []health.UpstreamTarget {
+	targets := make([]health.UpstreamTarget, 0, len(cfg.Upstreams))
+	for _, upstream := range cfg.Upstreams {
+		targets = append(targets, health.UpstreamTarget{Address: upstream.Address, Port: int(upstream.Port)})
+	}
+
+	return targets
 }
 
 func newHealthHandler(eng engine.Engine, checker *health.Checker) http.Handler {
