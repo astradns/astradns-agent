@@ -64,13 +64,28 @@ The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADN
 | `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_BURST` | `400` | Per-source token bucket burst for short spikes |
 | `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_STATE_TTL` | `5m` | Retention time for per-source limiter state before cleanup |
 | `ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_MAX_SOURCES` | `10000` | Max source IPs tracked for per-source limiting |
+| `ASTRADNS_PROXY_CACHE_MAX_ENTRIES` | `10000` | Max DNS responses cached at proxy layer before forwarding to engine |
+| `ASTRADNS_PROXY_CACHE_DEFAULT_TTL` | `30s` | Fallback TTL for proxy-layer cache entries without explicit record TTL |
+| `ASTRADNS_ENGINE_CONN_POOL_SIZE` | `64` | Max reusable DNS client connections per protocol to the local engine |
+| `ASTRADNS_CONFIG_WATCH_DEBOUNCE` | `1s` | Debounce window for config file change events before reload |
 | `ASTRADNS_ENGINE_RECOVERY_INTERVAL` | `5s` | Interval to probe engine responsiveness and auto-recover crashes |
+| `ASTRADNS_COMPONENT_ERROR_BUFFER` | `5` | Buffer size for component error channel before overflow drops |
+| `ASTRADNS_METRICS_BEARER_TOKEN` | `` | Optional bearer token required to access `/metrics` |
+| `ASTRADNS_TRACING_ENABLED` | `false` | Enable OpenTelemetry trace export for control-plane operations |
+| `ASTRADNS_TRACING_ENDPOINT` | `localhost:4318` | OTLP/HTTP collector endpoint used when tracing is enabled |
+| `ASTRADNS_TRACING_INSECURE` | `true` | Use plaintext OTLP/HTTP transport to the collector endpoint |
+| `ASTRADNS_TRACING_SAMPLE_RATIO` | `0.1` | Fraction of traces sampled (0-1) when tracing is enabled |
+| `ASTRADNS_TRACING_SERVICE_NAME` | `astradns-agent` | Service name reported in exported OpenTelemetry traces |
 | `ASTRADNS_LOG_MODE` | `sampled` | Query log mode (`full`, `sampled`, `errors-only`, `off`) |
 | `ASTRADNS_LOG_SAMPLE_RATE` | `0.1` | Fraction of queries to log when mode is `sampled` |
 
 ## Container Image Notes
 
 The default container image includes the `unbound` engine binary. `coredns` and `powerdns` engine types remain available in code but require a custom image that also ships those executables.
+
+Distroless runtime images were evaluated, but the default image currently stays on `debian:bookworm-slim` because it depends on distro-packaged resolver binaries and runtime libraries.
+
+The proxy layer includes a short-lived response cache to smooth local burst traffic, while resolver-grade cache behavior remains in the selected DNS engine.
 
 ## Deployment
 
@@ -104,6 +119,18 @@ make test
 
 # Run static analysis
 make vet
+
+# Run tests + vet
+make check
+
+# Run integration suite
+make integration-test
+
+# Run e2e suite (requires a kind cluster)
+make e2e-test
+
+# Clean build artifacts
+make clean
 ```
 
 ## Release

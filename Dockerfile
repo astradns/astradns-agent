@@ -23,7 +23,23 @@ COPY astradns-types /workspace/astradns-types
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /out/astradns-agent cmd/agent/main.go
 
 # Runtime image with unbound resolver binaries.
+# Distroless was evaluated, but this image currently needs distro-packaged
+# resolver binaries (unbound/unbound-control) and their runtime libraries.
 FROM debian:bookworm-slim
+
+ARG OCI_TITLE="astradns-agent"
+ARG OCI_DESCRIPTION="AstraDNS node-local DNS agent"
+ARG OCI_SOURCE="https://github.com/astradns/astradns"
+ARG OCI_VERSION="dev"
+ARG OCI_REVISION=""
+ARG OCI_CREATED=""
+
+LABEL org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="${OCI_SOURCE}" \
+      org.opencontainers.image.version="${OCI_VERSION}" \
+      org.opencontainers.image.revision="${OCI_REVISION}" \
+      org.opencontainers.image.created="${OCI_CREATED}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

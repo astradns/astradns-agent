@@ -1,11 +1,30 @@
-.PHONY: build test vet
+.PHONY: build test vet fmt lint check integration-test e2e-test clean
+
+GO ?= go
+BINARY := bin/astradns-agent
 
 build:
 	mkdir -p bin
-	go build -o bin/astradns-agent ./cmd/agent/
+	$(GO) build -o $(BINARY) ./cmd/agent/
 
 test:
-	go test ./...
+	$(GO) test ./...
 
 vet:
-	go vet ./...
+	$(GO) vet ./...
+
+fmt:
+	$(GO) fmt ./...
+
+lint: fmt vet
+
+check: test vet
+
+integration-test:
+	$(GO) test -tags=integration ./test/integration/...
+
+e2e-test:
+	$(GO) test -tags=e2e ./test/e2e/...
+
+clean:
+	rm -rf bin
