@@ -234,6 +234,60 @@ func TestLoadEngineConfig_EmptyListenAddr_FallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestLoadEngineConfig_PartialCacheFieldsDefaulted(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.json")
+
+	cfg := `{
+		"upstreams": [{"address": "1.1.1.1", "port": 53}],
+		"cache": {"maxEntries": 2500},
+		"listenAddr": "127.0.0.1",
+		"listenPort": 5354
+	}`
+	if err := os.WriteFile(configFile, []byte(cfg), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	engineAddr := "127.0.0.1:5354"
+	loaded, err := loadEngineConfig(configFile, engineAddr)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	defaults := defaultEngineConfig(engineAddr)
+	if loaded.Cache.MaxEntries != 2500 {
+		t.Fatalf("expected cache MaxEntries 2500, got %d", loaded.Cache.MaxEntries)
+	}
+	if loaded.Cache.PositiveTtlMin != defaults.Cache.PositiveTtlMin {
+		t.Fatalf(
+			"expected default cache PositiveTtlMin %d, got %d",
+			defaults.Cache.PositiveTtlMin,
+			loaded.Cache.PositiveTtlMin,
+		)
+	}
+	if loaded.Cache.PositiveTtlMax != defaults.Cache.PositiveTtlMax {
+		t.Fatalf(
+			"expected default cache PositiveTtlMax %d, got %d",
+			defaults.Cache.PositiveTtlMax,
+			loaded.Cache.PositiveTtlMax,
+		)
+	}
+	if loaded.Cache.NegativeTtl != defaults.Cache.NegativeTtl {
+		t.Fatalf(
+			"expected default cache NegativeTtl %d, got %d",
+			defaults.Cache.NegativeTtl,
+			loaded.Cache.NegativeTtl,
+		)
+	}
+	if loaded.Cache.PrefetchThreshold != defaults.Cache.PrefetchThreshold {
+		t.Fatalf(
+			"expected default cache PrefetchThreshold %d, got %d",
+			defaults.Cache.PrefetchThreshold,
+			loaded.Cache.PrefetchThreshold,
+		)
+	}
+}
+
 // --- Gap 4: splitHostPort, defaultEngineConfig, resolveConfigPaths tests ---
 
 func TestSplitHostPort(t *testing.T) {
@@ -473,6 +527,30 @@ func TestValidateEngineConfig(t *testing.T) {
 	invalid.Cache.PositiveTtlMax = 10
 	if err := validateEngineConfig(invalid); err == nil {
 		t.Fatal("expected error for invalid ttl bounds")
+	}
+
+	invalid = valid
+	invalid.Cache.PositiveTtlMin = 0
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for zero positive ttl min")
+	}
+
+	invalid = valid
+	invalid.Cache.PositiveTtlMax = 0
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for zero positive ttl max")
+	}
+
+	invalid = valid
+	invalid.Cache.NegativeTtl = 0
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for zero negative ttl")
+	}
+
+	invalid = valid
+	invalid.Cache.PrefetchThreshold = 0
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for zero prefetch threshold")
 	}
 }
 

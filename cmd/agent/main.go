@@ -346,6 +346,18 @@ func validateEngineConfig(cfg engine.EngineConfig) error {
 	if cfg.Cache.MaxEntries <= 0 {
 		return fmt.Errorf("cache.maxEntries must be greater than zero")
 	}
+	if cfg.Cache.PositiveTtlMin <= 0 {
+		return fmt.Errorf("cache.positiveTtlMin must be greater than zero")
+	}
+	if cfg.Cache.PositiveTtlMax <= 0 {
+		return fmt.Errorf("cache.positiveTtlMax must be greater than zero")
+	}
+	if cfg.Cache.NegativeTtl <= 0 {
+		return fmt.Errorf("cache.negativeTtl must be greater than zero")
+	}
+	if cfg.Cache.PrefetchThreshold <= 0 {
+		return fmt.Errorf("cache.prefetchThreshold must be greater than zero")
+	}
 	if cfg.Cache.PositiveTtlMin > 0 && cfg.Cache.PositiveTtlMax > 0 && cfg.Cache.PositiveTtlMin > cfg.Cache.PositiveTtlMax {
 		return fmt.Errorf("cache.positiveTtlMin must be <= cache.positiveTtlMax")
 	}
@@ -599,6 +611,19 @@ func loadEngineConfig(configFile, engineAddr string) (engine.EngineConfig, error
 
 	if cfg.Cache.MaxEntries == 0 {
 		cfg.Cache = defaults.Cache
+	} else {
+		if cfg.Cache.PositiveTtlMin == 0 {
+			cfg.Cache.PositiveTtlMin = defaults.Cache.PositiveTtlMin
+		}
+		if cfg.Cache.PositiveTtlMax == 0 {
+			cfg.Cache.PositiveTtlMax = defaults.Cache.PositiveTtlMax
+		}
+		if cfg.Cache.NegativeTtl == 0 {
+			cfg.Cache.NegativeTtl = defaults.Cache.NegativeTtl
+		}
+		if cfg.Cache.PrefetchThreshold == 0 {
+			cfg.Cache.PrefetchThreshold = defaults.Cache.PrefetchThreshold
+		}
 	}
 
 	return cfg, nil
