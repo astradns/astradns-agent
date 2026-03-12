@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -334,8 +335,8 @@ func validateEngineConfig(cfg engine.EngineConfig) error {
 		return fmt.Errorf("at least one upstream is required")
 	}
 	for i, upstream := range cfg.Upstreams {
-		if strings.TrimSpace(upstream.Address) == "" {
-			return fmt.Errorf("upstreams[%d].address must not be empty", i)
+		if !isValidUpstreamAddress(upstream.Address) {
+			return fmt.Errorf("upstreams[%d].address must be a valid IP or DNS name", i)
 		}
 		if upstream.Port <= 0 || upstream.Port > 65535 {
 			return fmt.Errorf("upstreams[%d].port must be between 1 and 65535", i)
@@ -349,6 +350,75 @@ func validateEngineConfig(cfg engine.EngineConfig) error {
 	}
 
 	return nil
+}
+
+func isValidUpstreamAddress(address string) bool {
+	trimmed := strings.TrimSpace(address)
+	if trimmed == "" {
+		return false
+	}
+
+	if _, err := netip.ParseAddr(trimmed); err == nil {
+		return true
+	}
+
+	if looksLikeInvalidIPv4Literal(trimmed) {
+		return false
+	}
+
+	return isDNS1123Subdomain(trimmed)
+}
+
+func looksLikeInvalidIPv4Literal(value string) bool {
+	if strings.Count(value, ".") != 3 {
+		return false
+	}
+
+	for _, r := range value {
+		if r != '.' && (r < '0' || r > '9') {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isDNS1123Subdomain(value string) bool {
+	if len(value) == 0 || len(value) > 253 {
+		return false
+	}
+
+	labels := strings.Split(value, ".")
+	for _, label := range labels {
+		if !isDNS1123Label(label) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isDNS1123Label(label string) bool {
+	if len(label) == 0 || len(label) > 63 {
+		return false
+	}
+
+	for i := 0; i < len(label); i++ {
+		ch := label[i]
+		isLowerAlpha := ch >= 'a' && ch <= 'z'
+		isDigit := ch >= '0' && ch <= '9'
+		isHyphen := ch == '-'
+
+		if !isLowerAlpha && !isDigit && !isHyphen {
+			return false
+		}
+
+		if (i == 0 || i == len(label)-1) && isHyphen {
+			return false
+		}
+	}
+
+	return true
 }
 
 func applyConfigReload(ctx context.Context, eng engine.Engine, cfg engine.EngineConfig) error {

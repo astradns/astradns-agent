@@ -435,10 +435,47 @@ func TestValidateEngineConfig(t *testing.T) {
 	}
 
 	invalid = valid
+	invalid.Upstreams[0].Address = "999.999.999.999"
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for invalid IPv4 literal")
+	}
+
+	invalid = valid
+	invalid.Upstreams[0].Address = "-bad.host"
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for invalid DNS hostname")
+	}
+
+	invalid = valid
 	invalid.Cache.PositiveTtlMin = 100
 	invalid.Cache.PositiveTtlMax = 10
 	if err := validateEngineConfig(invalid); err == nil {
 		t.Fatal("expected error for invalid ttl bounds")
+	}
+}
+
+func TestIsValidUpstreamAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		address string
+		want    bool
+	}{
+		{name: "valid IPv4", address: "1.1.1.1", want: true},
+		{name: "valid IPv6", address: "2001:4860:4860::8888", want: true},
+		{name: "valid hostname", address: "dns.google", want: true},
+		{name: "invalid dotted numeric", address: "999.999.999.999", want: false},
+		{name: "invalid hostname leading dash", address: "-bad.host", want: false},
+		{name: "uppercase hostname not DNS1123", address: "DNS.GOOGLE", want: false},
+		{name: "empty", address: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidUpstreamAddress(tt.address)
+			if got != tt.want {
+				t.Fatalf("isValidUpstreamAddress(%q) = %v, want %v", tt.address, got, tt.want)
+			}
+		})
 	}
 }
 
