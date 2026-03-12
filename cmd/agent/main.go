@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/astradns/astradns-agent/pkg/diagnostics"
+	_ "github.com/astradns/astradns-agent/pkg/engine/bind"
 	_ "github.com/astradns/astradns-agent/pkg/engine/coredns"
 	_ "github.com/astradns/astradns-agent/pkg/engine/powerdns"
 	_ "github.com/astradns/astradns-agent/pkg/engine/unbound"
