@@ -198,6 +198,11 @@ func main() {
 		SampleRate: cfg.LogSampleRate,
 	})
 
+	domainFilterRcode := dns.RcodeRefused
+	if engineConfig.DomainFilter.Action == engine.DomainFilterActionNXDomain {
+		domainFilterRcode = dns.RcodeNameError
+	}
+
 	proxyInstance := proxy.New(proxy.ProxyConfig{
 		ListenAddr:                   cfg.ListenAddr,
 		EngineAddr:                   cfg.EngineAddr,
@@ -212,6 +217,9 @@ func main() {
 		PerSourceRateLimitBurst:      cfg.ProxyPerSourceRateLimitBurst,
 		PerSourceRateLimitStateTTL:   cfg.ProxyPerSourceRateLimitStateTTL,
 		PerSourceRateLimitMaxSources: cfg.ProxyPerSourceRateLimitMaxSrc,
+		DomainFilterAllow:            engineConfig.DomainFilter.Allow,
+		DomainFilterDeny:             engineConfig.DomainFilter.Deny,
+		DomainFilterDenyRcode:        domainFilterRcode,
 		OnEventDrop: func() {
 			collector.ProxyDroppedEventsTotal.Inc()
 		},
@@ -387,6 +395,17 @@ func main() {
 
 			checker.UpdateUpstreams(upstreamTargetsFromConfig(newConfig))
 			checker.CheckNow(reloadCtx)
+
+			newFilterRcode := dns.RcodeRefused
+			if newConfig.DomainFilter.Action == engine.DomainFilterActionNXDomain {
+				newFilterRcode = dns.RcodeNameError
+			}
+			proxyInstance.UpdateFilter(
+				newConfig.DomainFilter.Allow,
+				newConfig.DomainFilter.Deny,
+				newFilterRcode,
+			)
+
 			currentConfig = newConfig
 			collector.AgentConfigReloadTotal.Inc()
 			span.SetStatus(codes.Ok, "applied")
@@ -598,6 +617,20 @@ func validateEngineConfig(cfg engine.EngineConfig) error {
 	}
 	if cfg.Cache.PositiveTtlMin > 0 && cfg.Cache.PositiveTtlMax > 0 && cfg.Cache.PositiveTtlMin > cfg.Cache.PositiveTtlMax {
 		return fmt.Errorf("cache.positiveTtlMin must be <= cache.positiveTtlMax")
+	}
+
+	for i, pattern := range cfg.DomainFilter.Allow {
+		if strings.TrimSpace(pattern) == "" {
+			return fmt.Errorf("domainFilter.allow[%d] must not be empty", i)
+		}
+	}
+	for i, pattern := range cfg.DomainFilter.Deny {
+		if strings.TrimSpace(pattern) == "" {
+			return fmt.Errorf("domainFilter.deny[%d] must not be empty", i)
+		}
+	}
+	if action := cfg.DomainFilter.Action; action != "" && action != engine.DomainFilterActionRefused && action != engine.DomainFilterActionNXDomain {
+		return fmt.Errorf("domainFilter.action must be one of refused or nxdomain")
 	}
 
 	return nil

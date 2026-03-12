@@ -29,6 +29,9 @@ type ProxyConfig struct {
 	PerSourceRateLimitBurst      int
 	PerSourceRateLimitStateTTL   time.Duration
 	PerSourceRateLimitMaxSources int
+	DomainFilterAllow            []string
+	DomainFilterDeny             []string
+	DomainFilterDenyRcode        int
 }
 
 const (
@@ -48,13 +51,15 @@ const (
 
 // Proxy is a DNS proxy that intercepts queries and emits events.
 type Proxy struct {
-	config  ProxyConfig
-	events  chan QueryEvent
-	dropped atomic.Int64
-	limiter *requestLimiter
-	cache   *responseCache
-	pool    *engineConnPool
-	now     func() time.Time
+	config       ProxyConfig
+	events       chan QueryEvent
+	dropped      atomic.Int64
+	limiter      *requestLimiter
+	filter       *domainFilter
+	filterRcode  int
+	cache        *responseCache
+	pool         *engineConnPool
+	now          func() time.Time
 
 	mu       sync.Mutex
 	udp      *dns.Server
@@ -106,16 +111,23 @@ func New(config ProxyConfig) *Proxy {
 	}
 
 	limiter := newRequestLimiter(config)
+	filter := newDomainFilter(config.DomainFilterAllow, config.DomainFilterDeny)
+	filterRcode := config.DomainFilterDenyRcode
+	if filterRcode == 0 {
+		filterRcode = dns.RcodeRefused
+	}
 	cache := newResponseCache(config.CacheMaxEntries, config.CacheDefaultTTL)
 	pool := newEngineConnPool(config.EngineAddr, config.QueryTimeout, config.EngineConnectionPoolSize)
 
 	return &Proxy{
-		config:  config,
-		events:  make(chan QueryEvent, config.EventChanSize),
-		limiter: limiter,
-		cache:   cache,
-		pool:    pool,
-		now:     time.Now,
+		config:      config,
+		events:      make(chan QueryEvent, config.EventChanSize),
+		limiter:     limiter,
+		filter:      filter,
+		filterRcode: filterRcode,
+		cache:       cache,
+		pool:        pool,
+		now:         time.Now,
 	}
 }
 
@@ -127,6 +139,20 @@ func (p *Proxy) Events() <-chan QueryEvent {
 // DroppedEvents returns the number of dropped query events.
 func (p *Proxy) DroppedEvents() int64 {
 	return p.dropped.Load()
+}
+
+// UpdateFilter replaces the domain filter rules at runtime.
+// Pass nil/empty slices to disable filtering.
+func (p *Proxy) UpdateFilter(allow, deny []string, rcode int) {
+	f := newDomainFilter(allow, deny)
+	if rcode == 0 {
+		rcode = dns.RcodeRefused
+	}
+
+	p.mu.Lock()
+	p.filter = f
+	p.filterRcode = rcode
+	p.mu.Unlock()
 }
 
 // Start starts the proxy listeners and blocks until the context is canceled.
@@ -209,6 +235,21 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 		return
 	}
 
+	p.mu.Lock()
+	filter := p.filter
+	filterRcode := p.filterRcode
+	p.mu.Unlock()
+
+	if filter != nil && !filter.Allowed(normalizeDomain(request)) {
+		response := new(dns.Msg)
+		response.SetRcode(request, filterRcode)
+
+		_ = w.WriteMsg(response)
+		p.emitDeniedEvent(start, srcIP, request, response)
+
+		return
+	}
+
 	if p.cache != nil {
 		cachedResponse, cached := p.cache.Get(request, start)
 		if cached {
@@ -256,6 +297,29 @@ func (p *Proxy) emitQueryEvent(
 		LatencyMs:     latencyMs,
 		CacheHitKnown: cacheHitKnown,
 		CacheHit:      cacheHit,
+	}
+	p.publishEvent(event)
+}
+
+func (p *Proxy) emitDeniedEvent(
+	start time.Time,
+	srcIP string,
+	request,
+	response *dns.Msg,
+) {
+	latencyMs := float64(p.now().Sub(start).Microseconds()) / 1000.0
+
+	event := QueryEvent{
+		Timestamp:     start,
+		SourceIP:      srcIP,
+		Domain:        normalizeDomain(request),
+		QueryType:     queryType(request),
+		ResponseCode:  responseCode(response),
+		Upstream:      deniedUpstreamLabel,
+		LatencyMs:     latencyMs,
+		CacheHitKnown: false,
+		CacheHit:      false,
+		Denied:        true,
 	}
 	p.publishEvent(event)
 }

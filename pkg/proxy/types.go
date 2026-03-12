@@ -13,4 +13,5 @@ type QueryEvent struct {
 	LatencyMs     float64
 	CacheHitKnown bool
 	CacheHit      bool
+	Denied        bool
 }
