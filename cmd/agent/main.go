@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"github.com/astradns/astradns-agent/pkg/proxy"
 	"github.com/astradns/astradns-agent/pkg/watcher"
 	"github.com/astradns/astradns-types/engine"
+	"github.com/miekg/dns"
 )
 
 const (
@@ -38,7 +40,10 @@ const (
 	defaultConfigFile   = "config.json"
 	defaultLogMode      = "sampled"
 	defaultLogSample    = 0.1
-	defaultWorkerBuffer = 10000
+	defaultProxyTimeout = 2 * time.Second
+
+	defaultEngineRecoveryInterval = 5 * time.Second
+	defaultWorkerBuffer           = 10000
 )
 
 type runtimeConfig struct {
@@ -50,8 +55,11 @@ type runtimeConfig struct {
 	ConfigSourceDir string
 	ConfigFile      string
 	EngineConfigDir string
-	LogMode         logging.LogMode
-	LogSampleRate   float64
+	ProxyTimeout    time.Duration
+
+	EngineRecoveryInterval time.Duration
+	LogMode                logging.LogMode
+	LogSampleRate          float64
 }
 
 func main() {
@@ -61,16 +69,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	eng, err := engine.New(engine.EngineType(cfg.EngineType), cfg.EngineConfigDir)
+	baseEngine, err := engine.New(engine.EngineType(cfg.EngineType), cfg.EngineConfigDir)
 	if err != nil {
 		logger.Error("failed to create engine", "error", err, "engine_type", cfg.EngineType)
 		os.Exit(1)
 	}
+	eng := &synchronizedEngine{inner: baseEngine}
 	logger.Info("engine selected", "engine_type", eng.Name())
 
 	engineConfig, err := loadEngineConfig(cfg.ConfigFile, cfg.EngineAddr)
 	if err != nil {
 		logger.Error("failed to load engine config", "error", err, "path", cfg.ConfigFile)
+		os.Exit(1)
+	}
+	if err := validateEngineConfig(engineConfig); err != nil {
+		logger.Error("invalid engine config", "error", err, "path", cfg.ConfigFile)
 		os.Exit(1)
 	}
 
@@ -95,11 +108,13 @@ func main() {
 	proxyInstance := proxy.New(proxy.ProxyConfig{
 		ListenAddr:    cfg.ListenAddr,
 		EngineAddr:    cfg.EngineAddr,
+		QueryTimeout:  cfg.ProxyTimeout,
 		EventChanSize: defaultWorkerBuffer,
 		OnEventDrop: func() {
 			collector.ProxyDroppedEventsTotal.Inc()
 		},
 	})
+	currentConfig := engineConfig
 
 	upstreams := make([]health.UpstreamTarget, 0, len(engineConfig.Upstreams))
 	for _, upstream := range engineConfig.Upstreams {
@@ -136,81 +151,80 @@ func main() {
 	componentErrs := make(chan error, 5)
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := proxyInstance.Start(ctx); err != nil {
-			componentErrs <- fmt.Errorf("proxy failed: %w", err)
-		}
-	}()
+	startComponent(&wg, componentErrs, "proxy", func() error {
+		return proxyInstance.Start(ctx)
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "fanout", func() error {
 		fanOut(proxyInstance.Events(), func() {
 			collector.FanOutDroppedEventsTotal.Inc()
 		}, metricsEvents, loggerEvents)
-	}()
+		return nil
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "metrics collector", func() error {
 		collector.Run(ctx, metricsEvents)
-	}()
+		return nil
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "query logger", func() error {
 		queryLogger.Run(ctx, loggerEvents)
-	}()
+		return nil
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "health checker", func() error {
 		checker.Run(ctx)
-	}()
+		return nil
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "metrics server", func() error {
 		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			componentErrs <- fmt.Errorf("metrics server failed: %w", err)
+			return err
 		}
-	}()
+		return nil
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "health server", func() error {
 		if err := healthServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			componentErrs <- fmt.Errorf("health server failed: %w", err)
+			return err
 		}
-	}()
+		return nil
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	startComponent(&wg, componentErrs, "config watcher", func() error {
 		configWatcher := watcher.New(cfg.ConfigSourceDir, func(ctx context.Context) error {
 			newConfig, err := loadEngineConfig(cfg.ConfigFile, cfg.EngineAddr)
 			if err != nil {
 				collector.AgentConfigReloadErrorsTotal.Inc()
 				return fmt.Errorf("reload config: %w", err)
 			}
-			if _, err := eng.Configure(ctx, newConfig); err != nil {
+			if err := validateEngineConfig(newConfig); err != nil {
 				collector.AgentConfigReloadErrorsTotal.Inc()
-				return fmt.Errorf("reconfigure engine: %w", err)
+				return fmt.Errorf("validate config: %w", err)
 			}
-			if err := eng.Reload(ctx); err != nil {
+			if err := applyConfigReload(ctx, eng, newConfig); err != nil {
 				collector.AgentConfigReloadErrorsTotal.Inc()
-				return fmt.Errorf("reload engine: %w", err)
+				if ctx.Err() != nil {
+					return err
+				}
+				rollbackErr := applyConfigReload(ctx, eng, currentConfig)
+				if rollbackErr != nil {
+					return fmt.Errorf("reload engine: %w (rollback failed: %v)", err, rollbackErr)
+				}
+				return fmt.Errorf("reload engine: %w (rolled back)", err)
 			}
+			currentConfig = newConfig
 			collector.AgentConfigReloadTotal.Inc()
 			logger.Info("engine config reloaded successfully")
 			return nil
 		}, logger)
-		if err := configWatcher.Run(ctx); err != nil {
-			componentErrs <- fmt.Errorf("config watcher failed: %w", err)
-		}
-	}()
+		return configWatcher.Run(ctx)
+	})
+
+	startComponent(&wg, componentErrs, "engine supervisor", func() error {
+		superviseEngine(ctx, eng, cfg.EngineAddr, cfg.EngineRecoveryInterval, logger, collector)
+		return nil
+	})
 
 	var runErr error
 	select {
@@ -244,6 +258,178 @@ func main() {
 	}
 }
 
+type synchronizedEngine struct {
+	inner engine.Engine
+	mu    sync.Mutex
+}
+
+func (e *synchronizedEngine) Configure(ctx context.Context, cfg engine.EngineConfig) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.inner.Configure(ctx, cfg)
+}
+
+func (e *synchronizedEngine) Start(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.inner.Start(ctx)
+}
+
+func (e *synchronizedEngine) Reload(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.inner.Reload(ctx)
+}
+
+func (e *synchronizedEngine) Stop(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.inner.Stop(ctx)
+}
+
+func (e *synchronizedEngine) HealthCheck(ctx context.Context) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.inner.HealthCheck(ctx)
+}
+
+func (e *synchronizedEngine) Name() engine.EngineType {
+	return e.inner.Name()
+}
+
+type componentFn func() error
+
+func startComponent(wg *sync.WaitGroup, errs chan<- error, name string, fn componentFn) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				reportComponentErr(errs, fmt.Errorf("%s panicked: %v\n%s", name, recovered, string(debug.Stack())))
+			}
+		}()
+
+		if err := fn(); err != nil && !errors.Is(err, context.Canceled) {
+			reportComponentErr(errs, fmt.Errorf("%s failed: %w", name, err))
+		}
+	}()
+}
+
+func reportComponentErr(errs chan<- error, err error) {
+	select {
+	case errs <- err:
+	default:
+	}
+}
+
+func validateEngineConfig(cfg engine.EngineConfig) error {
+	if cfg.ListenAddr == "" {
+		return fmt.Errorf("listenAddr must not be empty")
+	}
+	if cfg.ListenPort <= 0 || cfg.ListenPort > 65535 {
+		return fmt.Errorf("listenPort must be between 1 and 65535")
+	}
+	if len(cfg.Upstreams) == 0 {
+		return fmt.Errorf("at least one upstream is required")
+	}
+	for i, upstream := range cfg.Upstreams {
+		if upstream.Address == "" {
+			return fmt.Errorf("upstreams[%d].address must not be empty", i)
+		}
+		if upstream.Port <= 0 || upstream.Port > 65535 {
+			return fmt.Errorf("upstreams[%d].port must be between 1 and 65535", i)
+		}
+	}
+	if cfg.Cache.MaxEntries <= 0 {
+		return fmt.Errorf("cache.maxEntries must be greater than zero")
+	}
+	if cfg.Cache.PositiveTtlMin > 0 && cfg.Cache.PositiveTtlMax > 0 && cfg.Cache.PositiveTtlMin > cfg.Cache.PositiveTtlMax {
+		return fmt.Errorf("cache.positiveTtlMin must be <= cache.positiveTtlMax")
+	}
+
+	return nil
+}
+
+func applyConfigReload(ctx context.Context, eng engine.Engine, cfg engine.EngineConfig) error {
+	if _, err := eng.Configure(ctx, cfg); err != nil {
+		return fmt.Errorf("reconfigure engine: %w", err)
+	}
+	if err := eng.Reload(ctx); err != nil {
+		return fmt.Errorf("reload engine: %w", err)
+	}
+
+	return nil
+}
+
+func superviseEngine(
+	ctx context.Context,
+	eng engine.Engine,
+	engineAddr string,
+	interval time.Duration,
+	logger *slog.Logger,
+	collector *metrics.Collector,
+) {
+	if interval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkCtx, cancel := context.WithTimeout(ctx, defaultProxyTimeout)
+			responsive, err := isEngineResponsive(checkCtx, engineAddr)
+			cancel()
+			if responsive {
+				continue
+			}
+
+			collector.AgentEngineRecoveryAttemptsTotal.Inc()
+			logger.Warn(
+				"engine is not responding, attempting restart",
+				"engine_addr", engineAddr,
+				"error", err,
+			)
+
+			restartCtx, restartCancel := context.WithTimeout(ctx, 5*time.Second)
+			if stopErr := eng.Stop(restartCtx); stopErr != nil {
+				logger.Warn("failed to stop engine before restart", "error", stopErr)
+			}
+			startErr := eng.Start(restartCtx)
+			restartCancel()
+
+			if startErr != nil {
+				collector.AgentEngineRecoveryErrorsTotal.Inc()
+				logger.Error("failed to restart engine", "error", startErr)
+				continue
+			}
+
+			collector.AgentEngineRecoverySuccessTotal.Inc()
+			logger.Info("engine restarted successfully")
+		}
+	}
+}
+
+func isEngineResponsive(ctx context.Context, engineAddr string) (bool, error) {
+	msg := new(dns.Msg)
+	msg.SetQuestion(".", dns.TypeA)
+
+	client := &dns.Client{}
+	response, _, err := client.ExchangeContext(ctx, msg, engineAddr)
+	if err != nil {
+		return false, err
+	}
+	if response == nil {
+		return false, fmt.Errorf("empty DNS response from engine")
+	}
+
+	return true, nil
+}
+
 func loadRuntimeConfig() runtimeConfig {
 	configSourceDir, configFile := resolveConfigPaths(getEnv("ASTRADNS_CONFIG_PATH", defaultConfigPath))
 
@@ -256,8 +442,11 @@ func loadRuntimeConfig() runtimeConfig {
 		ConfigSourceDir: configSourceDir,
 		ConfigFile:      configFile,
 		EngineConfigDir: getEnv("ASTRADNS_ENGINE_CONFIG_DIR", defaultEngineCfgDir),
-		LogMode:         logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
-		LogSampleRate:   getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
+		ProxyTimeout:    getEnvDuration("ASTRADNS_PROXY_TIMEOUT", defaultProxyTimeout),
+
+		EngineRecoveryInterval: getEnvDuration("ASTRADNS_ENGINE_RECOVERY_INTERVAL", defaultEngineRecoveryInterval),
+		LogMode:                logging.LogMode(getEnv("ASTRADNS_LOG_MODE", defaultLogMode)),
+		LogSampleRate:          getEnvFloat("ASTRADNS_LOG_SAMPLE_RATE", defaultLogSample),
 	}
 }
 
@@ -276,6 +465,18 @@ func getEnvFloat(key string, fallback float64) float64 {
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
 		return fallback
 	}
 	return parsed

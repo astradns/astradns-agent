@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/astradns/astradns-agent/pkg/proxy"
 	"github.com/astradns/astradns-types/engine"
@@ -388,5 +390,80 @@ func TestResolveConfigPaths_NonExistentNonJSONPath(t *testing.T) {
 	expected := filepath.Join(path, defaultConfigFile)
 	if configFile != expected {
 		t.Fatalf("expected configFile %q, got %q", expected, configFile)
+	}
+}
+
+func TestGetEnvDuration(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_DURATION", "3s")
+	if got := getEnvDuration("ASTRADNS_TEST_DURATION", time.Second); got != 3*time.Second {
+		t.Fatalf("expected 3s duration, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_DURATION", "not-a-duration")
+	if got := getEnvDuration("ASTRADNS_TEST_DURATION", time.Second); got != time.Second {
+		t.Fatalf("expected fallback duration, got %v", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_DURATION", "-2s")
+	if got := getEnvDuration("ASTRADNS_TEST_DURATION", time.Second); got != time.Second {
+		t.Fatalf("expected fallback for negative duration, got %v", got)
+	}
+}
+
+func TestValidateEngineConfig(t *testing.T) {
+	valid := defaultEngineConfig("127.0.0.1:5354")
+	if err := validateEngineConfig(valid); err != nil {
+		t.Fatalf("expected valid config, got error: %v", err)
+	}
+
+	invalid := valid
+	invalid.Upstreams = nil
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for missing upstreams")
+	}
+
+	invalid = valid
+	invalid.Cache.PositiveTtlMin = 100
+	invalid.Cache.PositiveTtlMax = 10
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for invalid ttl bounds")
+	}
+}
+
+type mockReloadEngine struct {
+	configureErr error
+	reloadErr    error
+}
+
+func (m *mockReloadEngine) Configure(_ context.Context, _ engine.EngineConfig) (string, error) {
+	if m.configureErr != nil {
+		return "", m.configureErr
+	}
+	return "ok", nil
+}
+
+func (m *mockReloadEngine) Start(context.Context) error { return nil }
+
+func (m *mockReloadEngine) Reload(context.Context) error {
+	return m.reloadErr
+}
+
+func (m *mockReloadEngine) Stop(context.Context) error { return nil }
+
+func (m *mockReloadEngine) HealthCheck(context.Context) (bool, error) {
+	return true, nil
+}
+
+func (m *mockReloadEngine) Name() engine.EngineType { return "mock" }
+
+func TestApplyConfigReload(t *testing.T) {
+	eng := &mockReloadEngine{}
+	if err := applyConfigReload(context.Background(), eng, defaultEngineConfig("127.0.0.1:5354")); err != nil {
+		t.Fatalf("expected successful apply, got error: %v", err)
+	}
+
+	eng = &mockReloadEngine{reloadErr: os.ErrInvalid}
+	if err := applyConfigReload(context.Background(), eng, defaultEngineConfig("127.0.0.1:5354")); err == nil {
+		t.Fatal("expected error when reload fails")
 	}
 }

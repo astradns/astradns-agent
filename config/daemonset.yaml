@@ -45,6 +45,10 @@ spec:
           value: "/etc/astradns/config/config.json"
         - name: ASTRADNS_ENGINE_CONFIG_DIR
           value: "/var/run/astradns/engine"
+        - name: ASTRADNS_PROXY_TIMEOUT
+          value: "2s"
+        - name: ASTRADNS_ENGINE_RECOVERY_INTERVAL
+          value: "5s"
         - name: ASTRADNS_LOG_MODE
           value: "sampled"
         - name: ASTRADNS_LOG_SAMPLE_RATE

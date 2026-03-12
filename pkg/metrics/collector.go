@@ -14,22 +14,25 @@ import (
 type Collector struct {
 	registry *prometheus.Registry
 
-	QueriesTotal                 prometheus.Counter
-	QueriesByType                *prometheus.CounterVec
-	CacheHitsTotal               prometheus.Counter
-	CacheMissesTotal             prometheus.Counter
-	UpstreamQueriesTotal         *prometheus.CounterVec
-	UpstreamLatencySeconds       *prometheus.HistogramVec
-	UpstreamFailuresTotal        *prometheus.CounterVec
-	UpstreamHealthy              *prometheus.GaugeVec
-	NXDomainTotal                prometheus.Counter
-	ServfailTotal                prometheus.Counter
-	TimeoutTotal                 *prometheus.CounterVec
-	AgentUp                      prometheus.Gauge
-	AgentConfigReloadTotal       prometheus.Counter
-	AgentConfigReloadErrorsTotal prometheus.Counter
-	ProxyDroppedEventsTotal      prometheus.Counter
-	FanOutDroppedEventsTotal     prometheus.Counter
+	QueriesTotal                     prometheus.Counter
+	QueriesByType                    *prometheus.CounterVec
+	CacheHitsTotal                   prometheus.Counter
+	CacheMissesTotal                 prometheus.Counter
+	UpstreamQueriesTotal             *prometheus.CounterVec
+	UpstreamLatencySeconds           *prometheus.HistogramVec
+	UpstreamFailuresTotal            *prometheus.CounterVec
+	UpstreamHealthy                  *prometheus.GaugeVec
+	NXDomainTotal                    prometheus.Counter
+	ServfailTotal                    prometheus.Counter
+	TimeoutTotal                     *prometheus.CounterVec
+	AgentUp                          prometheus.Gauge
+	AgentConfigReloadTotal           prometheus.Counter
+	AgentConfigReloadErrorsTotal     prometheus.Counter
+	AgentEngineRecoveryAttemptsTotal prometheus.Counter
+	AgentEngineRecoverySuccessTotal  prometheus.Counter
+	AgentEngineRecoveryErrorsTotal   prometheus.Counter
+	ProxyDroppedEventsTotal          prometheus.Counter
+	FanOutDroppedEventsTotal         prometheus.Counter
 }
 
 // NewCollector creates a Collector and registers all AstraDNS metrics.
@@ -97,6 +100,18 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 			Name: "astradns_agent_config_reload_errors_total",
 			Help: "Total number of failed config reloads.",
 		}),
+		AgentEngineRecoveryAttemptsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "astradns_agent_engine_recovery_attempts_total",
+			Help: "Total number of engine recovery attempts.",
+		}),
+		AgentEngineRecoverySuccessTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "astradns_agent_engine_recovery_success_total",
+			Help: "Total number of successful engine recoveries.",
+		}),
+		AgentEngineRecoveryErrorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "astradns_agent_engine_recovery_errors_total",
+			Help: "Total number of failed engine recoveries.",
+		}),
 		ProxyDroppedEventsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "astradns_proxy_dropped_events_total",
 			Help: "Total number of query events dropped by the proxy pipeline.",
@@ -122,6 +137,9 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 		c.AgentUp,
 		c.AgentConfigReloadTotal,
 		c.AgentConfigReloadErrorsTotal,
+		c.AgentEngineRecoveryAttemptsTotal,
+		c.AgentEngineRecoverySuccessTotal,
+		c.AgentEngineRecoveryErrorsTotal,
 		c.ProxyDroppedEventsTotal,
 		c.FanOutDroppedEventsTotal,
 	)

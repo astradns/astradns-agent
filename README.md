@@ -55,6 +55,8 @@ The agent reads an `EngineConfig` JSON file from a ConfigMap mounted at `ASTRADN
 | `ASTRADNS_ENGINE_ADDR` | `127.0.0.1:5354` | Address of the engine subprocess |
 | `ASTRADNS_METRICS_ADDR` | `:9153` | Address for the Prometheus metrics endpoint |
 | `ASTRADNS_HEALTH_ADDR` | `:8080` | Address for the health check endpoint |
+| `ASTRADNS_PROXY_TIMEOUT` | `2s` | Per-query proxy timeout when forwarding to engine |
+| `ASTRADNS_ENGINE_RECOVERY_INTERVAL` | `5s` | Interval to probe engine responsiveness and auto-recover crashes |
 | `ASTRADNS_LOG_MODE` | `sampled` | Query log mode (`full`, `sampled`, `errors-only`, `off`) |
 | `ASTRADNS_LOG_SAMPLE_RATE` | `0.1` | Fraction of queries to log when mode is `sampled` |
 

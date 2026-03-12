@@ -169,6 +169,9 @@ func TestHandlerExposesExactMetricNames(t *testing.T) {
 		"astradns_agent_up",
 		"astradns_agent_config_reload_total",
 		"astradns_agent_config_reload_errors_total",
+		"astradns_agent_engine_recovery_attempts_total",
+		"astradns_agent_engine_recovery_success_total",
+		"astradns_agent_engine_recovery_errors_total",
 		"astradns_proxy_dropped_events_total",
 		"astradns_fanout_dropped_events_total",
 	}

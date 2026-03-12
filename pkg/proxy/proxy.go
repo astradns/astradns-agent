@@ -17,6 +17,7 @@ import (
 type ProxyConfig struct {
 	ListenAddr    string
 	EngineAddr    string
+	QueryTimeout  time.Duration
 	EventChanSize int
 	OnEventDrop   func()
 }
@@ -41,6 +42,9 @@ func New(config ProxyConfig) *Proxy {
 	}
 	if config.EngineAddr == "" {
 		config.EngineAddr = "127.0.0.1:5354"
+	}
+	if config.QueryTimeout <= 0 {
+		config.QueryTimeout = 2 * time.Second
 	}
 	if config.EventChanSize <= 0 {
 		config.EventChanSize = 10000
@@ -127,7 +131,7 @@ func (p *Proxy) Stop() {
 
 func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 	start := time.Now()
-	client := &dns.Client{Net: networkForRemoteAddr(w.RemoteAddr()), Timeout: 2 * time.Second}
+	client := &dns.Client{Net: networkForRemoteAddr(w.RemoteAddr()), Timeout: p.config.QueryTimeout}
 
 	response, _, err := client.Exchange(request.Copy(), p.config.EngineAddr)
 	if err != nil || response == nil {
