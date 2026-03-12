@@ -417,9 +417,21 @@ func TestValidateEngineConfig(t *testing.T) {
 	}
 
 	invalid := valid
+	invalid.ListenAddr = "   "
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for whitespace listenAddr")
+	}
+
+	invalid = valid
 	invalid.Upstreams = nil
 	if err := validateEngineConfig(invalid); err == nil {
 		t.Fatal("expected error for missing upstreams")
+	}
+
+	invalid = valid
+	invalid.Upstreams[0].Address = "   "
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for whitespace upstream address")
 	}
 
 	invalid = valid

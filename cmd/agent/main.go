@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -323,7 +324,7 @@ func reportComponentErr(errs chan<- error, err error) {
 }
 
 func validateEngineConfig(cfg engine.EngineConfig) error {
-	if cfg.ListenAddr == "" {
+	if strings.TrimSpace(cfg.ListenAddr) == "" {
 		return fmt.Errorf("listenAddr must not be empty")
 	}
 	if cfg.ListenPort <= 0 || cfg.ListenPort > 65535 {
@@ -333,7 +334,7 @@ func validateEngineConfig(cfg engine.EngineConfig) error {
 		return fmt.Errorf("at least one upstream is required")
 	}
 	for i, upstream := range cfg.Upstreams {
-		if upstream.Address == "" {
+		if strings.TrimSpace(upstream.Address) == "" {
 			return fmt.Errorf("upstreams[%d].address must not be empty", i)
 		}
 		if upstream.Port <= 0 || upstream.Port > 65535 {
