@@ -14,25 +14,26 @@ import (
 type Collector struct {
 	registry *prometheus.Registry
 
-	QueriesTotal                     prometheus.Counter
-	QueriesByType                    *prometheus.CounterVec
-	CacheHitsTotal                   prometheus.Counter
-	CacheMissesTotal                 prometheus.Counter
-	UpstreamQueriesTotal             *prometheus.CounterVec
-	UpstreamLatencySeconds           *prometheus.HistogramVec
-	UpstreamFailuresTotal            *prometheus.CounterVec
-	UpstreamHealthy                  *prometheus.GaugeVec
-	NXDomainTotal                    prometheus.Counter
-	ServfailTotal                    prometheus.Counter
-	TimeoutTotal                     *prometheus.CounterVec
-	AgentUp                          prometheus.Gauge
-	AgentConfigReloadTotal           prometheus.Counter
-	AgentConfigReloadErrorsTotal     prometheus.Counter
-	AgentEngineRecoveryAttemptsTotal prometheus.Counter
-	AgentEngineRecoverySuccessTotal  prometheus.Counter
-	AgentEngineRecoveryErrorsTotal   prometheus.Counter
-	ProxyDroppedEventsTotal          prometheus.Counter
-	FanOutDroppedEventsTotal         prometheus.Counter
+	QueriesTotal                       prometheus.Counter
+	QueriesByType                      *prometheus.CounterVec
+	CacheHitsTotal                     prometheus.Counter
+	CacheMissesTotal                   prometheus.Counter
+	UpstreamQueriesTotal               *prometheus.CounterVec
+	UpstreamLatencySeconds             *prometheus.HistogramVec
+	UpstreamFailuresTotal              *prometheus.CounterVec
+	UpstreamHealthy                    *prometheus.GaugeVec
+	NXDomainTotal                      prometheus.Counter
+	ServfailTotal                      prometheus.Counter
+	TimeoutTotal                       *prometheus.CounterVec
+	AgentUp                            prometheus.Gauge
+	AgentConfigReloadTotal             prometheus.Counter
+	AgentConfigReloadErrorsTotal       prometheus.Counter
+	AgentEngineRecoveryAttemptsTotal   prometheus.Counter
+	AgentEngineRecoverySuccessTotal    prometheus.Counter
+	AgentEngineRecoveryErrorsTotal     prometheus.Counter
+	ProxyDroppedEventsTotal            prometheus.Counter
+	FanOutDroppedEventsTotal           prometheus.Counter
+	ComponentErrorBufferOverflowsTotal prometheus.Counter
 }
 
 // NewCollector creates a Collector and registers all AstraDNS metrics.
@@ -120,6 +121,10 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 			Name: "astradns_fanout_dropped_events_total",
 			Help: "Total number of query events dropped while fanning out to workers.",
 		}),
+		ComponentErrorBufferOverflowsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "astradns_component_error_buffer_overflows_total",
+			Help: "Total number of dropped component errors when the supervisor error channel is full.",
+		}),
 	}
 
 	registry.MustRegister(
@@ -142,6 +147,7 @@ func NewCollector(registry *prometheus.Registry) *Collector {
 		c.AgentEngineRecoveryErrorsTotal,
 		c.ProxyDroppedEventsTotal,
 		c.FanOutDroppedEventsTotal,
+		c.ComponentErrorBufferOverflowsTotal,
 	)
 
 	c.AgentUp.Set(1)

@@ -88,6 +88,26 @@ func TestUnboundEngineHealthCheck(t *testing.T) {
 	if !healthy {
 		t.Fatal("expected HealthCheck() to return healthy")
 	}
+
+	status, err := e.HealthStatus(ctx)
+	if err != nil {
+		t.Fatalf("HealthStatus() error = %v", err)
+	}
+	if !status.Healthy {
+		t.Fatalf("expected healthy status, got %+v", status)
+	}
+}
+
+func TestUnboundEngineCapabilities(t *testing.T) {
+	e := NewUnboundEngine(t.TempDir())
+	caps := e.Capabilities()
+
+	if !caps.SupportsHotReload {
+		t.Fatal("expected unbound engine to support hot reload")
+	}
+	if len(caps.SupportedTransports) != 2 {
+		t.Fatalf("expected unbound to advertise 2 transports, got %d", len(caps.SupportedTransports))
+	}
 }
 
 func TestUnboundEngineName(t *testing.T) {

@@ -174,6 +174,7 @@ func TestHandlerExposesExactMetricNames(t *testing.T) {
 		"astradns_agent_engine_recovery_errors_total",
 		"astradns_proxy_dropped_events_total",
 		"astradns_fanout_dropped_events_total",
+		"astradns_component_error_buffer_overflows_total",
 	}
 
 	for _, metricName := range expectedMetricNames {

@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/astradns/astradns-agent/pkg/metrics"
 	"github.com/astradns/astradns-agent/pkg/proxy"
 	"github.com/astradns/astradns-types/engine"
 	"github.com/miekg/dns"
@@ -376,6 +379,15 @@ func TestDefaultEngineConfig(t *testing.T) {
 	if cfg.Upstreams[0].Port != 53 {
 		t.Fatalf("expected default upstream port 53, got %d", cfg.Upstreams[0].Port)
 	}
+	if cfg.Upstreams[0].Transport != engine.UpstreamTransportDNS {
+		t.Fatalf("expected default upstream transport dns, got %q", cfg.Upstreams[0].Transport)
+	}
+	if cfg.WorkerThreads <= 0 {
+		t.Fatalf("expected positive default worker threads, got %d", cfg.WorkerThreads)
+	}
+	if cfg.DNSSEC.Mode != engine.DNSSECModeOff {
+		t.Fatalf("expected default DNSSEC mode off, got %q", cfg.DNSSEC.Mode)
+	}
 	if cfg.Cache.MaxEntries != 10000 {
 		t.Fatalf("expected cache MaxEntries 10000, got %d", cfg.Cache.MaxEntries)
 	}
@@ -503,6 +515,47 @@ func TestLoadRuntimeConfigHealthProbeOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeConfigProxyAndTracingOverrides(t *testing.T) {
+	t.Setenv("ASTRADNS_PROXY_CACHE_MAX_ENTRIES", "2048")
+	t.Setenv("ASTRADNS_PROXY_CACHE_DEFAULT_TTL", "45s")
+	t.Setenv("ASTRADNS_ENGINE_CONN_POOL_SIZE", "32")
+	t.Setenv("ASTRADNS_METRICS_BEARER_TOKEN", "secret")
+	t.Setenv("ASTRADNS_TRACING_ENABLED", "true")
+	t.Setenv("ASTRADNS_TRACING_ENDPOINT", "otel-collector.monitoring.svc:4318")
+	t.Setenv("ASTRADNS_TRACING_INSECURE", "false")
+	t.Setenv("ASTRADNS_TRACING_SAMPLE_RATIO", "0.25")
+	t.Setenv("ASTRADNS_TRACING_SERVICE_NAME", "astradns-agent-test")
+
+	cfg := loadRuntimeConfig()
+	if cfg.ProxyCacheMaxEntries != 2048 {
+		t.Fatalf("expected proxy cache max entries 2048, got %d", cfg.ProxyCacheMaxEntries)
+	}
+	if cfg.ProxyCacheDefaultTTL != 45*time.Second {
+		t.Fatalf("expected proxy cache ttl 45s, got %s", cfg.ProxyCacheDefaultTTL)
+	}
+	if cfg.EngineConnectionPoolSize != 32 {
+		t.Fatalf("expected engine connection pool size 32, got %d", cfg.EngineConnectionPoolSize)
+	}
+	if cfg.MetricsBearerToken != "secret" {
+		t.Fatalf("expected metrics bearer token to be loaded")
+	}
+	if !cfg.TracingEnabled {
+		t.Fatal("expected tracing to be enabled")
+	}
+	if cfg.TracingEndpoint != "otel-collector.monitoring.svc:4318" {
+		t.Fatalf("unexpected tracing endpoint %q", cfg.TracingEndpoint)
+	}
+	if cfg.TracingInsecure {
+		t.Fatal("expected tracing insecure to be false")
+	}
+	if cfg.TracingSampleRatio != 0.25 {
+		t.Fatalf("expected tracing sample ratio 0.25, got %v", cfg.TracingSampleRatio)
+	}
+	if cfg.TracingServiceName != "astradns-agent-test" {
+		t.Fatalf("unexpected tracing service name %q", cfg.TracingServiceName)
+	}
+}
+
 func TestGetEnvFloat(t *testing.T) {
 	t.Setenv("ASTRADNS_TEST_FLOAT", "0.25")
 	if got := getEnvFloat("ASTRADNS_TEST_FLOAT", 0.1); got != 0.25 {
@@ -566,6 +619,82 @@ func TestGetEnvPositiveInt(t *testing.T) {
 	t.Setenv("ASTRADNS_TEST_POS_INT", "not-an-int")
 	if got := getEnvPositiveInt("ASTRADNS_TEST_POS_INT", 10); got != 10 {
 		t.Fatalf("expected fallback 10 for invalid value, got %d", got)
+	}
+}
+
+func TestGetEnvNonNegativeInt(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_NON_NEG_INT", "0")
+	if got := getEnvNonNegativeInt("ASTRADNS_TEST_NON_NEG_INT", 5); got != 0 {
+		t.Fatalf("expected 0, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_NON_NEG_INT", "12")
+	if got := getEnvNonNegativeInt("ASTRADNS_TEST_NON_NEG_INT", 5); got != 12 {
+		t.Fatalf("expected 12, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_NON_NEG_INT", "-2")
+	if got := getEnvNonNegativeInt("ASTRADNS_TEST_NON_NEG_INT", 5); got != 5 {
+		t.Fatalf("expected fallback 5 for negative value, got %d", got)
+	}
+
+	t.Setenv("ASTRADNS_TEST_NON_NEG_INT", "invalid")
+	if got := getEnvNonNegativeInt("ASTRADNS_TEST_NON_NEG_INT", 5); got != 5 {
+		t.Fatalf("expected fallback 5 for invalid value, got %d", got)
+	}
+}
+
+func TestGetEnvBool(t *testing.T) {
+	t.Setenv("ASTRADNS_TEST_BOOL", "true")
+	if got := getEnvBool("ASTRADNS_TEST_BOOL", false); !got {
+		t.Fatal("expected true value")
+	}
+
+	t.Setenv("ASTRADNS_TEST_BOOL", "0")
+	if got := getEnvBool("ASTRADNS_TEST_BOOL", true); got {
+		t.Fatal("expected false value from numeric false")
+	}
+
+	t.Setenv("ASTRADNS_TEST_BOOL", "invalid")
+	if got := getEnvBool("ASTRADNS_TEST_BOOL", true); !got {
+		t.Fatal("expected fallback true for invalid bool")
+	}
+}
+
+func TestNewMetricsHandlerRejectsUnauthorizedRequests(t *testing.T) {
+	handler := newMetricsHandler(metrics.NewCollector(nil), "top-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec.Code)
+	}
+}
+
+func TestNewMetricsHandlerAcceptsAuthorizedRequests(t *testing.T) {
+	handler := newMetricsHandler(metrics.NewCollector(nil), "top-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer top-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestNewMetricsHandlerWithoutTokenKeepsEndpointOpen(t *testing.T) {
+	handler := newMetricsHandler(metrics.NewCollector(nil), "")
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 }
 
@@ -635,6 +764,18 @@ func TestValidateEngineConfig(t *testing.T) {
 	if err := validateEngineConfig(invalid); err == nil {
 		t.Fatal("expected error for zero prefetch threshold")
 	}
+
+	invalid = valid
+	invalid.Upstreams[0].Transport = "invalid"
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for invalid upstream transport")
+	}
+
+	invalid = valid
+	invalid.DNSSEC.Mode = "strict"
+	if err := validateEngineConfig(invalid); err == nil {
+		t.Fatal("expected error for unsupported DNSSEC mode")
+	}
 }
 
 func TestIsValidUpstreamAddress(t *testing.T) {
@@ -680,6 +821,47 @@ func TestValidateEngineConfigRejectsDuplicateUpstreams(t *testing.T) {
 	}
 }
 
+func TestLoadEngineConfigDefaultsDoTAndDoHPorts(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.json")
+
+	cfg := `{
+		"upstreams": [
+			{"address": "dns.quad9.net", "transport": "dot"},
+			{"address": "dns.google", "transport": "doh"}
+		]
+	}`
+	if err := os.WriteFile(configFile, []byte(cfg), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	loaded, err := loadEngineConfig(configFile, "127.0.0.1:5354")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if loaded.Upstreams[0].Port != 853 {
+		t.Fatalf("expected DoT default port 853, got %d", loaded.Upstreams[0].Port)
+	}
+	if loaded.Upstreams[1].Port != 443 {
+		t.Fatalf("expected DoH default port 443, got %d", loaded.Upstreams[1].Port)
+	}
+}
+
+func TestReportComponentErrCallsOnDropWhenBufferFull(t *testing.T) {
+	errs := make(chan error, 1)
+	errs <- os.ErrClosed
+
+	var dropped atomic.Int32
+	reportComponentErr(errs, os.ErrInvalid, func() {
+		dropped.Add(1)
+	})
+
+	if dropped.Load() != 1 {
+		t.Fatalf("expected one dropped component error callback, got %d", dropped.Load())
+	}
+}
+
 type mockReloadEngine struct {
 	configureErr error
 	reloadErr    error
@@ -699,6 +881,14 @@ func (m *mockReloadEngine) Reload(context.Context) error {
 }
 
 func (m *mockReloadEngine) Stop(context.Context) error { return nil }
+
+func (m *mockReloadEngine) Capabilities() engine.EngineCapabilities {
+	return engine.EngineCapabilities{}
+}
+
+func (m *mockReloadEngine) HealthStatus(context.Context) (engine.EngineHealthStatus, error) {
+	return engine.EngineHealthStatus{Healthy: true}, nil
+}
 
 func (m *mockReloadEngine) HealthCheck(context.Context) (bool, error) {
 	return true, nil

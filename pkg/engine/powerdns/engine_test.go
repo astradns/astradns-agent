@@ -88,6 +88,26 @@ func TestPowerDNSEngineHealthCheck(t *testing.T) {
 	if !healthy {
 		t.Fatal("expected HealthCheck() to return healthy")
 	}
+
+	status, err := e.HealthStatus(ctx)
+	if err != nil {
+		t.Fatalf("HealthStatus() error = %v", err)
+	}
+	if !status.Healthy {
+		t.Fatalf("expected healthy status, got %+v", status)
+	}
+}
+
+func TestPowerDNSEngineCapabilities(t *testing.T) {
+	e := NewPowerDNSEngine(t.TempDir())
+	caps := e.Capabilities()
+
+	if !caps.SupportsHotReload {
+		t.Fatal("expected powerdns engine to support hot reload")
+	}
+	if len(caps.SupportedTransports) != 1 || caps.SupportedTransports[0] != engine.UpstreamTransportDNS {
+		t.Fatalf("expected powerdns to advertise only plain DNS transport, got %v", caps.SupportedTransports)
+	}
 }
 
 func TestPowerDNSEngineName(t *testing.T) {

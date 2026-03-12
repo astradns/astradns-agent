@@ -64,6 +64,14 @@ func TestRenderConfigMaxCacheEntries(t *testing.T) {
 	}
 }
 
+func TestRenderConfigRejectsEncryptedTransports(t *testing.T) {
+	config := testRenderConfigWithUpstreams(engine.UpstreamConfig{Address: "dns.google", Transport: engine.UpstreamTransportDoH})
+
+	if _, err := RenderConfig(config); err == nil {
+		t.Fatal("expected error for encrypted upstream transport in powerdns engine")
+	}
+}
+
 func testRenderConfigWithUpstreams(upstreams ...engine.UpstreamConfig) engine.EngineConfig {
 	return engine.EngineConfig{
 		Upstreams: upstreams,

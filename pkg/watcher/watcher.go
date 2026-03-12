@@ -14,6 +14,18 @@ const defaultDebounceDuration = 1 * time.Second
 // ReloadFunc is called when a config file change is detected.
 type ReloadFunc func(ctx context.Context) error
 
+// Option configures ConfigWatcher behavior.
+type Option func(*ConfigWatcher)
+
+// WithDebounce overrides the change debounce window.
+func WithDebounce(debounce time.Duration) Option {
+	return func(w *ConfigWatcher) {
+		if debounce > 0 {
+			w.debounce = debounce
+		}
+	}
+}
+
 // ConfigWatcher watches a config directory for changes and triggers reloads.
 // It is designed to work with Kubernetes ConfigMap mounts, where the kubelet
 // creates a new timestamped directory and atomically swaps the ..data symlink.
@@ -27,17 +39,25 @@ type ConfigWatcher struct {
 
 // New creates a ConfigWatcher that monitors configDir for filesystem events
 // and calls onReload after a debounce period when changes are detected.
-func New(configDir string, onReload ReloadFunc, logger *slog.Logger) *ConfigWatcher {
+func New(configDir string, onReload ReloadFunc, logger *slog.Logger, options ...Option) *ConfigWatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	return &ConfigWatcher{
+	watcher := &ConfigWatcher{
 		configDir: configDir,
 		onReload:  onReload,
 		logger:    logger,
 		debounce:  defaultDebounceDuration,
 	}
+
+	for _, option := range options {
+		if option != nil {
+			option(watcher)
+		}
+	}
+
+	return watcher
 }
 
 // Run starts watching the config directory and blocks until ctx is cancelled.

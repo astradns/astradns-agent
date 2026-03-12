@@ -16,24 +16,29 @@ import (
 
 // mockEngine implements engine.Engine for testing the health handler.
 type mockEngine struct {
-	healthCheckFn func(ctx context.Context) (bool, error)
+	healthStatusFn func(ctx context.Context) (engine.EngineHealthStatus, error)
 }
 
 func (m *mockEngine) Configure(_ context.Context, _ engine.EngineConfig) (string, error) {
 	return "", nil
 }
-func (m *mockEngine) Start(_ context.Context) error  { return nil }
-func (m *mockEngine) Reload(_ context.Context) error  { return nil }
-func (m *mockEngine) Stop(_ context.Context) error    { return nil }
-func (m *mockEngine) Name() engine.EngineType         { return "mock" }
+func (m *mockEngine) Start(_ context.Context) error           { return nil }
+func (m *mockEngine) Reload(_ context.Context) error          { return nil }
+func (m *mockEngine) Stop(_ context.Context) error            { return nil }
+func (m *mockEngine) Capabilities() engine.EngineCapabilities { return engine.EngineCapabilities{} }
+func (m *mockEngine) Name() engine.EngineType                 { return "mock" }
+func (m *mockEngine) HealthStatus(ctx context.Context) (engine.EngineHealthStatus, error) {
+	return m.healthStatusFn(ctx)
+}
 func (m *mockEngine) HealthCheck(ctx context.Context) (bool, error) {
-	return m.healthCheckFn(ctx)
+	status, err := m.healthStatusFn(ctx)
+	return status.Healthy, err
 }
 
 func TestHealthHandler_EngineHealthyAndUpstreamsHealthy(t *testing.T) {
 	eng := &mockEngine{
-		healthCheckFn: func(_ context.Context) (bool, error) {
-			return true, nil
+		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
+			return engine.EngineHealthStatus{Healthy: true}, nil
 		},
 	}
 
@@ -79,8 +84,8 @@ func TestHealthHandler_EngineHealthyAndUpstreamsHealthy(t *testing.T) {
 
 func TestHealthHandler_EngineHealthyNoHealthyUpstreams(t *testing.T) {
 	eng := &mockEngine{
-		healthCheckFn: func(_ context.Context) (bool, error) {
-			return true, nil
+		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
+			return engine.EngineHealthStatus{Healthy: true}, nil
 		},
 	}
 
@@ -123,8 +128,8 @@ func TestHealthHandler_EngineHealthyNoHealthyUpstreams(t *testing.T) {
 
 func TestHealthHandler_EngineUnhealthy(t *testing.T) {
 	eng := &mockEngine{
-		healthCheckFn: func(_ context.Context) (bool, error) {
-			return false, fmt.Errorf("engine not responding")
+		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
+			return engine.EngineHealthStatus{Healthy: false, Reason: "engine not responding"}, fmt.Errorf("engine not responding")
 		},
 	}
 
@@ -166,8 +171,8 @@ func TestHealthHandler_EngineUnhealthy(t *testing.T) {
 
 func TestHealthHandler_EngineHealthCheckReturnsFalseWithoutError(t *testing.T) {
 	eng := &mockEngine{
-		healthCheckFn: func(_ context.Context) (bool, error) {
-			return false, nil
+		healthStatusFn: func(_ context.Context) (engine.EngineHealthStatus, error) {
+			return engine.EngineHealthStatus{Healthy: false, Reason: "not ready"}, nil
 		},
 	}
 

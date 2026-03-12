@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/astradns/astradns-agent/pkg/metrics"
+	"github.com/astradns/astradns-types/engine"
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -282,6 +283,23 @@ func TestCheckerPort0NormalizesTo53(t *testing.T) {
 	expected := "10.0.0.1:53"
 	if label != expected {
 		t.Fatalf("expected label %q for port 0, got %q", expected, label)
+	}
+}
+
+func TestCheckerDoHTargetMarkedHealthy(t *testing.T) {
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams: []UpstreamTarget{{Address: "dns.google", Transport: engine.UpstreamTransportDoH}},
+	}, collector)
+
+	checker.CheckNow(context.Background())
+
+	if !checker.HasHealthyUpstream() {
+		t.Fatal("expected checker to mark DoH upstream as healthy")
+	}
+	label := "doh://dns.google:443"
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(label)); got != 1 {
+		t.Fatalf("expected DoH upstream healthy gauge = 1, got %v", got)
 	}
 }
 

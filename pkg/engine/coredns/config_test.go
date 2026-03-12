@@ -67,6 +67,34 @@ func TestRenderConfigNonStandardPort(t *testing.T) {
 	}
 }
 
+func TestRenderConfigSupportsDoTAndDoH(t *testing.T) {
+	config := testRenderConfigWithUpstreams(
+		engine.UpstreamConfig{Address: "dns.quad9.net", Transport: engine.UpstreamTransportDoT, TLSServerName: "resolver.example"},
+		engine.UpstreamConfig{Address: "dns.google", Transport: engine.UpstreamTransportDoH, TLSServerName: "resolver.example"},
+	)
+
+	rendered, err := RenderConfig(config)
+	if err != nil {
+		t.Fatalf("RenderConfig() error = %v", err)
+	}
+
+	if !strings.Contains(rendered, "tls://dns.quad9.net:853") {
+		t.Fatalf("expected DoT upstream target in config\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "https://dns.google:443") {
+		t.Fatalf("expected DoH upstream target in config\n%s", rendered)
+	}
+}
+
+func TestRenderConfigRejectsDNSSECModes(t *testing.T) {
+	config := testRenderConfigWithUpstreams(engine.UpstreamConfig{Address: "1.1.1.1", Port: 53})
+	config.DNSSEC.Mode = engine.DNSSECModeValidate
+
+	if _, err := RenderConfig(config); err == nil {
+		t.Fatal("expected DNSSEC mode validation error for coredns engine")
+	}
+}
+
 func testRenderConfigWithUpstreams(upstreams ...engine.UpstreamConfig) engine.EngineConfig {
 	return engine.EngineConfig{
 		Upstreams: upstreams,

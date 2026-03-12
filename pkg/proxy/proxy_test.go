@@ -127,6 +127,57 @@ func TestProxyCachesResponsesAndMarksCacheHits(t *testing.T) {
 	}
 }
 
+func TestProxyReusesEngineConnections(t *testing.T) {
+	engineAddr, upstreamQueries, stopEngine := startCountingEngine(t)
+	defer stopEngine()
+
+	listenAddr := freeLocalAddr(t)
+	p := New(ProxyConfig{
+		ListenAddr:               listenAddr,
+		EngineAddr:               engineAddr,
+		EventChanSize:            8,
+		EngineConnectionPoolSize: 4,
+	})
+
+	originalDial := p.pool.dial
+	var dialCount atomic.Int64
+	p.pool.dial = func(network, address string, timeout time.Duration) (*dns.Conn, error) {
+		dialCount.Add(1)
+		return originalDial(network, address, timeout)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Start(ctx)
+	}()
+
+	for i := 0; i < 5; i++ {
+		response := exchangeWithRetry(t, "udp", listenAddr, fmt.Sprintf("reuse-%d.example.org.", i))
+		if response.Rcode != dns.RcodeSuccess {
+			t.Fatalf("expected NOERROR response, got rcode %d", response.Rcode)
+		}
+	}
+
+	if got := upstreamQueries.Load(); got != 5 {
+		t.Fatalf("expected 5 upstream queries, got %d", got)
+	}
+
+	if got := dialCount.Load(); got > 2 {
+		t.Fatalf("expected pooled engine dials to stay low, got %d", got)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("unexpected proxy start error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not stop after context cancellation")
+	}
+}
+
 func TestProxyDropsEventsWhenChannelIsFull(t *testing.T) {
 	engineAddr, stopEngine := startTestEngine(t)
 	defer stopEngine()

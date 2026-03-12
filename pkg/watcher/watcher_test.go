@@ -209,3 +209,10 @@ func TestContextCancellation_StopsWatcher(t *testing.T) {
 		t.Fatal("watcher did not stop within timeout after context cancellation")
 	}
 }
+
+func TestWithDebounceOptionOverridesDefault(t *testing.T) {
+	w := New(t.TempDir(), func(_ context.Context) error { return nil }, slog.Default(), WithDebounce(250*time.Millisecond))
+	if w.debounce != 250*time.Millisecond {
+		t.Fatalf("expected debounce 250ms, got %s", w.debounce)
+	}
+}

@@ -83,6 +83,26 @@ func TestCoreDNSEngineHealthCheck(t *testing.T) {
 	if !healthy {
 		t.Fatal("expected HealthCheck() to return healthy")
 	}
+
+	status, err := e.HealthStatus(ctx)
+	if err != nil {
+		t.Fatalf("HealthStatus() error = %v", err)
+	}
+	if !status.Healthy {
+		t.Fatalf("expected healthy status, got %+v", status)
+	}
+}
+
+func TestCoreDNSEngineCapabilities(t *testing.T) {
+	e := NewCoreDNSEngine(t.TempDir())
+	caps := e.Capabilities()
+
+	if !caps.SupportsHotReload {
+		t.Fatal("expected coredns engine to support hot reload")
+	}
+	if len(caps.SupportedDNSSECModes) != 1 || caps.SupportedDNSSECModes[0] != engine.DNSSECModeOff {
+		t.Fatalf("expected coredns to advertise only dnssec off mode, got %v", caps.SupportedDNSSECModes)
+	}
 }
 
 func TestCoreDNSEngineName(t *testing.T) {

@@ -81,6 +81,30 @@ func TestRenderConfigDefaultPort53HasNoSuffix(t *testing.T) {
 	}
 }
 
+func TestRenderConfigDoTUpstreamEnablesForwardTLS(t *testing.T) {
+	config := testRenderConfigWithUpstreams(engine.UpstreamConfig{Address: "dns.quad9.net", Transport: engine.UpstreamTransportDoT})
+
+	rendered, err := RenderConfig(config)
+	if err != nil {
+		t.Fatalf("RenderConfig() error = %v", err)
+	}
+
+	if !strings.Contains(rendered, "forward-tls-upstream: yes") {
+		t.Fatalf("expected forward-tls-upstream: yes in config\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "forward-addr: dns.quad9.net@853") {
+		t.Fatalf("expected DoT default port 853 in config\n%s", rendered)
+	}
+}
+
+func TestRenderConfigDoHUpstreamReturnsError(t *testing.T) {
+	config := testRenderConfigWithUpstreams(engine.UpstreamConfig{Address: "dns.google", Transport: engine.UpstreamTransportDoH})
+
+	if _, err := RenderConfig(config); err == nil {
+		t.Fatal("expected error for DoH upstream in unbound engine")
+	}
+}
+
 func testRenderConfigWithUpstreams(upstreams ...engine.UpstreamConfig) engine.EngineConfig {
 	return engine.EngineConfig{
 		Upstreams: upstreams,

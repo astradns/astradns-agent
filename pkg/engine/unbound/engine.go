@@ -133,15 +133,30 @@ func (e *UnboundEngine) Stop(ctx context.Context) error {
 	return nil
 }
 
-// HealthCheck sends a DNS A query for "." to verify Unbound is serving queries.
-func (e *UnboundEngine) HealthCheck(ctx context.Context) (bool, error) {
+// Capabilities returns feature support advertised by the Unbound engine adapter.
+func (e *UnboundEngine) Capabilities() engine.EngineCapabilities {
+	return engine.EngineCapabilities{
+		SupportsHotReload:         true,
+		SupportedTransports:       []engine.UpstreamTransport{engine.UpstreamTransportDNS, engine.UpstreamTransportDoT},
+		SupportedDNSSECModes:      []engine.DNSSECMode{engine.DNSSECModeOff, engine.DNSSECModeProcess, engine.DNSSECModeValidate},
+		SupportsTLSServerName:     true,
+		SupportsWeightedUpstreams: true,
+		SupportsPriorityUpstreams: true,
+	}
+}
+
+// HealthStatus sends a DNS A query for "." and returns detailed engine health.
+func (e *UnboundEngine) HealthStatus(ctx context.Context) (engine.EngineHealthStatus, error) {
+	startedAt := time.Now()
+
 	e.mu.Lock()
 	listenAddr := e.config.ListenAddr
 	listenPort := e.config.ListenPort
 	e.mu.Unlock()
 
 	if listenAddr == "" || listenPort == 0 {
-		return false, errors.New("unbound is not configured")
+		err := errors.New("unbound is not configured")
+		return engine.EngineHealthStatus{Healthy: false, Reason: err.Error()}, err
 	}
 
 	msg := new(dns.Msg)
@@ -149,14 +164,27 @@ func (e *UnboundEngine) HealthCheck(ctx context.Context) (bool, error) {
 
 	client := &dns.Client{}
 	resp, _, err := client.ExchangeContext(ctx, msg, net.JoinHostPort(listenAddr, strconv.Itoa(int(listenPort))))
+	latency := time.Since(startedAt)
 	if err != nil {
-		return false, err
+		return engine.EngineHealthStatus{Healthy: false, Latency: latency, Reason: err.Error()}, err
 	}
 	if resp == nil {
-		return false, errors.New("empty DNS response")
+		err = errors.New("empty DNS response")
+		return engine.EngineHealthStatus{Healthy: false, Latency: latency, Reason: err.Error()}, err
 	}
 
-	return resp.Rcode == dns.RcodeSuccess, nil
+	if resp.Rcode != dns.RcodeSuccess {
+		reason := fmt.Sprintf("unexpected DNS rcode %s", dns.RcodeToString[resp.Rcode])
+		return engine.EngineHealthStatus{Healthy: false, Latency: latency, Reason: reason}, nil
+	}
+
+	return engine.EngineHealthStatus{Healthy: true, Latency: latency}, nil
+}
+
+// HealthCheck sends a DNS A query for "." to verify Unbound is serving queries.
+func (e *UnboundEngine) HealthCheck(ctx context.Context) (bool, error) {
+	status, err := e.HealthStatus(ctx)
+	return status.Healthy, err
 }
 
 // Name returns the engine type identifier.

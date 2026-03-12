@@ -18,6 +18,7 @@ type ProxyConfig struct {
 	ListenAddr                   string
 	EngineAddr                   string
 	QueryTimeout                 time.Duration
+	EngineConnectionPoolSize     int
 	EventChanSize                int
 	CacheMaxEntries              int
 	CacheDefaultTTL              time.Duration
@@ -37,6 +38,7 @@ const (
 	defaultPerSourceRateLimitBurst      = 400
 	defaultPerSourceRateLimitStateTTL   = 5 * time.Minute
 	defaultPerSourceRateLimitMaxSources = 10000
+	defaultEngineConnPoolSize           = 64
 	defaultProxyCacheMaxEntries         = 10000
 	defaultProxyCacheTTL                = 30 * time.Second
 
@@ -51,6 +53,7 @@ type Proxy struct {
 	dropped atomic.Int64
 	limiter *requestLimiter
 	cache   *responseCache
+	pool    *engineConnPool
 	now     func() time.Time
 
 	mu       sync.Mutex
@@ -73,6 +76,9 @@ func New(config ProxyConfig) *Proxy {
 	}
 	if config.EventChanSize <= 0 {
 		config.EventChanSize = 10000
+	}
+	if config.EngineConnectionPoolSize <= 0 {
+		config.EngineConnectionPoolSize = defaultEngineConnPoolSize
 	}
 	if config.CacheMaxEntries <= 0 {
 		config.CacheMaxEntries = defaultProxyCacheMaxEntries
@@ -101,12 +107,14 @@ func New(config ProxyConfig) *Proxy {
 
 	limiter := newRequestLimiter(config)
 	cache := newResponseCache(config.CacheMaxEntries, config.CacheDefaultTTL)
+	pool := newEngineConnPool(config.EngineAddr, config.QueryTimeout, config.EngineConnectionPoolSize)
 
 	return &Proxy{
 		config:  config,
 		events:  make(chan QueryEvent, config.EventChanSize),
 		limiter: limiter,
 		cache:   cache,
+		pool:    pool,
 		now:     time.Now,
 	}
 }
@@ -178,6 +186,9 @@ func (p *Proxy) Stop() {
 		if tcpServer != nil {
 			_ = tcpServer.Shutdown()
 		}
+		if p.pool != nil {
+			p.pool.Close()
+		}
 
 		p.inFlight.Wait()
 		close(p.events)
@@ -207,9 +218,10 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 		}
 	}
 
-	client := &dns.Client{Net: networkForRemoteAddr(w.RemoteAddr()), Timeout: p.config.QueryTimeout}
+	exchangeCtx, cancel := context.WithTimeout(context.Background(), p.config.QueryTimeout)
+	defer cancel()
 
-	response, _, err := client.Exchange(request.Copy(), p.config.EngineAddr)
+	response, err := p.pool.Exchange(exchangeCtx, networkForRemoteAddr(w.RemoteAddr()), request)
 	if err != nil || response == nil {
 		response = new(dns.Msg)
 		response.SetRcode(request, dns.RcodeServerFailure)

@@ -68,8 +68,28 @@ spec:
           value: "5m"
         - name: ASTRADNS_PROXY_RATE_LIMIT_PER_SOURCE_MAX_SOURCES
           value: "10000"
+        - name: ASTRADNS_PROXY_CACHE_MAX_ENTRIES
+          value: "10000"
+        - name: ASTRADNS_PROXY_CACHE_DEFAULT_TTL
+          value: "30s"
+        - name: ASTRADNS_ENGINE_CONN_POOL_SIZE
+          value: "64"
+        - name: ASTRADNS_CONFIG_WATCH_DEBOUNCE
+          value: "1s"
         - name: ASTRADNS_ENGINE_RECOVERY_INTERVAL
           value: "5s"
+        - name: ASTRADNS_COMPONENT_ERROR_BUFFER
+          value: "5"
+        - name: ASTRADNS_TRACING_ENABLED
+          value: "false"
+        - name: ASTRADNS_TRACING_ENDPOINT
+          value: "localhost:4318"
+        - name: ASTRADNS_TRACING_INSECURE
+          value: "true"
+        - name: ASTRADNS_TRACING_SAMPLE_RATIO
+          value: "0.1"
+        - name: ASTRADNS_TRACING_SERVICE_NAME
+          value: "astradns-agent"
         - name: ASTRADNS_LOG_MODE
           value: "sampled"
         - name: ASTRADNS_LOG_SAMPLE_RATE
