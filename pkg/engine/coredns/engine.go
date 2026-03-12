@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/astradns/astradns-agent/pkg/engine/processlog"
 	"github.com/astradns/astradns-types/engine"
 	"github.com/miekg/dns"
 )
@@ -83,6 +84,8 @@ func (e *CoreDNSEngine) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.Command("coredns", "-conf", e.configPath)
+	cmd.Stdout = processlog.NewLineWriter(string(engine.EngineCoreDNS), "stdout")
+	cmd.Stderr = processlog.NewLineWriter(string(engine.EngineCoreDNS), "stderr")
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start coredns: %w", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/astradns/astradns-agent/pkg/engine/processlog"
 	"github.com/astradns/astradns-types/engine"
 	"github.com/miekg/dns"
 )
@@ -83,6 +84,8 @@ func (e *PowerDNSEngine) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.Command("pdns_recursor", fmt.Sprintf("--config-dir=%s", e.configDir))
+	cmd.Stdout = processlog.NewLineWriter(string(engine.EnginePowerDNS), "stdout")
+	cmd.Stderr = processlog.NewLineWriter(string(engine.EnginePowerDNS), "stderr")
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start powerdns: %w", err)
 	}
