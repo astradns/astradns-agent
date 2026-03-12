@@ -32,6 +32,7 @@ type ProxyConfig struct {
 	DomainFilterAllow            []string
 	DomainFilterDeny             []string
 	DomainFilterDenyRcode        int
+	FallbackUpstreams            []string
 }
 
 const (
@@ -45,9 +46,10 @@ const (
 	defaultProxyCacheMaxEntries         = 10000
 	defaultProxyCacheTTL                = 30 * time.Second
 
-	rateLimitOverflowUpstream = "rate-limit"
-	cacheHitUpstreamLabel     = "proxy-cache"
-	cacheStaleUpstreamLabel   = "proxy-cache-stale"
+	rateLimitOverflowUpstream  = "rate-limit"
+	cacheHitUpstreamLabel      = "proxy-cache"
+	cacheStaleUpstreamLabel    = "proxy-cache-stale"
+	fallbackUpstreamLabel      = "fallback-direct"
 )
 
 // Proxy is a DNS proxy that intercepts queries and emits events.
@@ -56,11 +58,12 @@ type Proxy struct {
 	events       chan QueryEvent
 	dropped      atomic.Int64
 	limiter      *requestLimiter
-	filter       *domainFilter
-	filterRcode  int
-	cache        *responseCache
-	pool         *engineConnPool
-	now          func() time.Time
+	filter             *domainFilter
+	filterRcode        int
+	fallbackUpstreams  []string
+	cache              *responseCache
+	pool               *engineConnPool
+	now                func() time.Time
 
 	mu       sync.Mutex
 	udp      *dns.Server
@@ -124,11 +127,12 @@ func New(config ProxyConfig) *Proxy {
 		config:      config,
 		events:      make(chan QueryEvent, config.EventChanSize),
 		limiter:     limiter,
-		filter:      filter,
-		filterRcode: filterRcode,
-		cache:       cache,
-		pool:        pool,
-		now:         time.Now,
+		filter:            filter,
+		filterRcode:       filterRcode,
+		fallbackUpstreams: config.FallbackUpstreams,
+		cache:             cache,
+		pool:              pool,
+		now:               time.Now,
 	}
 }
 
@@ -265,6 +269,7 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 
 	response, err := p.pool.Exchange(exchangeCtx, networkForRemoteAddr(w.RemoteAddr()), request)
 	if err != nil || response == nil {
+		// 1. Try stale cache
 		if p.cache != nil {
 			staleResponse, stale := p.cache.GetStale(request, start)
 			if stale {
@@ -273,6 +278,17 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 				return
 			}
 		}
+
+		// 2. Try fallback upstreams directly
+		if fallbackResponse := p.tryFallbackUpstreams(exchangeCtx, request); fallbackResponse != nil {
+			if p.cache != nil {
+				p.cache.Store(request, fallbackResponse, start)
+			}
+			_ = w.WriteMsg(fallbackResponse)
+			p.emitQueryEvent(start, srcIP, request, fallbackResponse, fallbackUpstreamLabel, true, false)
+			return
+		}
+
 		response = new(dns.Msg)
 		response.SetRcode(request, dns.RcodeServerFailure)
 	}
@@ -283,6 +299,33 @@ func (p *Proxy) handleQuery(w dns.ResponseWriter, request *dns.Msg) {
 
 	_ = w.WriteMsg(response)
 	p.emitQueryEvent(start, srcIP, request, response, p.config.EngineAddr, true, false)
+}
+
+func (p *Proxy) tryFallbackUpstreams(ctx context.Context, request *dns.Msg) *dns.Msg {
+	p.mu.Lock()
+	upstreams := p.fallbackUpstreams
+	p.mu.Unlock()
+
+	if len(upstreams) == 0 {
+		return nil
+	}
+
+	client := &dns.Client{Timeout: p.config.QueryTimeout}
+	for _, upstream := range upstreams {
+		response, _, err := client.ExchangeContext(ctx, request, upstream)
+		if err == nil && response != nil {
+			return response
+		}
+	}
+
+	return nil
+}
+
+// UpdateFallbackUpstreams replaces the fallback upstream list at runtime.
+func (p *Proxy) UpdateFallbackUpstreams(upstreams []string) {
+	p.mu.Lock()
+	p.fallbackUpstreams = upstreams
+	p.mu.Unlock()
 }
 
 func (p *Proxy) emitQueryEvent(

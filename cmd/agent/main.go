@@ -220,6 +220,7 @@ func main() {
 		DomainFilterAllow:            engineConfig.DomainFilter.Allow,
 		DomainFilterDeny:             engineConfig.DomainFilter.Deny,
 		DomainFilterDenyRcode:        domainFilterRcode,
+		FallbackUpstreams:            fallbackUpstreamsFromConfig(engineConfig),
 		OnEventDrop: func() {
 			collector.ProxyDroppedEventsTotal.Inc()
 		},
@@ -405,6 +406,7 @@ func main() {
 				newConfig.DomainFilter.Deny,
 				newFilterRcode,
 			)
+			proxyInstance.UpdateFallbackUpstreams(fallbackUpstreamsFromConfig(newConfig))
 
 			currentConfig = newConfig
 			collector.AgentConfigReloadTotal.Inc()
@@ -1121,6 +1123,21 @@ func upstreamTargetsFromConfig(cfg engine.EngineConfig) []health.UpstreamTarget 
 	}
 
 	return targets
+}
+
+func fallbackUpstreamsFromConfig(cfg engine.EngineConfig) []string {
+	addrs := make([]string, 0, len(cfg.Upstreams))
+	for _, u := range cfg.Upstreams {
+		if u.Transport != engine.UpstreamTransportDNS {
+			continue
+		}
+		port := u.Port
+		if port == 0 {
+			port = 53
+		}
+		addrs = append(addrs, fmt.Sprintf("%s:%d", u.Address, port))
+	}
+	return addrs
 }
 
 func resolveDefaultWorkerThreads() int32 {
