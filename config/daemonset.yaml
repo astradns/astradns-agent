@@ -83,6 +83,8 @@ spec:
             memory: 256Mi
         securityContext:
           runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
