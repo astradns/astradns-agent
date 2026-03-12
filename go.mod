@@ -3,7 +3,7 @@ module github.com/astradns/astradns-agent
 go 1.26.1
 
 require (
-	github.com/astradns/astradns-types v0.2.0
+	github.com/astradns/astradns-types v0.2.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/miekg/dns v1.1.72
 	github.com/prometheus/client_golang v1.23.2

@@ -1,5 +1,5 @@
-github.com/astradns/astradns-types v0.2.0 h1:AlgpJkDJG/Cf/qepDsYXndkm2Con+ThHZaH64o/lZIk=
-github.com/astradns/astradns-types v0.2.0/go.mod h1:4SqQqZFte2dGsIJoQrjbbRQDnyMICrwGlRbyR+gc5FU=
+github.com/astradns/astradns-types v0.2.1 h1:wWruWDJqIRYvMzSzpKctHRZuPd6CcRL3adhIMaBZV4I=
+github.com/astradns/astradns-types v0.2.1/go.mod h1:4SqQqZFte2dGsIJoQrjbbRQDnyMICrwGlRbyR+gc5FU=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=

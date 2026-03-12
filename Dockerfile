@@ -1,3 +1,7 @@
+# Runtime image selector must be declared before the first FROM so it can be
+# referenced in later stage FROM instructions.
+ARG ENGINE_IMAGE=ghcr.io/astradns/unbound:1.24.2
+
 # Build the agent binary
 FROM golang:1.26.1 AS builder
 ARG TARGETOS
@@ -18,7 +22,6 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /o
 #   ENGINE_IMAGE=ghcr.io/astradns/unbound:1.24.2      (default)
 #   ENGINE_IMAGE=ghcr.io/astradns/powerdns-recursor:5.1
 #   ENGINE_IMAGE=ghcr.io/astradns/bind:9.20.20
-ARG ENGINE_IMAGE=ghcr.io/astradns/unbound:1.24.2
 FROM ${ENGINE_IMAGE}
 
 ARG OCI_TITLE="astradns-agent"
