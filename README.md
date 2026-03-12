@@ -87,6 +87,8 @@ Distroless runtime images were evaluated, but the default image currently stays 
 
 The proxy layer includes a short-lived response cache to smooth local burst traffic, while resolver-grade cache behavior remains in the selected DNS engine.
 
+Release tags publish multi-arch images to GHCR at `ghcr.io/astradns/astradns-agent:<tag>`.
+
 ## Deployment
 
 The Kubernetes manifest is at `config/daemonset.yaml`. It includes the DaemonSet, ServiceAccount, and metrics Service.
