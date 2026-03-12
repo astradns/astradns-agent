@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -99,6 +100,83 @@ func TestDebounce_RapidChangesResultInSingleReload(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("unexpected error from Run: %v", err)
+	}
+}
+
+func TestReloadError_WatcherContinuesAndRetriesOnNextChange(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "engine.json")
+	if err := os.WriteFile(configFile, []byte(`{"initial": true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var callCount atomic.Int32
+
+	w := New(dir, func(_ context.Context) error {
+		count := callCount.Add(1)
+		if count == 1 {
+			return fmt.Errorf("simulated reload failure")
+		}
+		return nil
+	}, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	w.debounce = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.Run(ctx)
+	}()
+
+	// Allow time for the watcher to start.
+	time.Sleep(200 * time.Millisecond)
+
+	// First change: triggers reload which fails.
+	if err := os.WriteFile(configFile, []byte(`{"attempt": 1}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	if callCount.Load() != 1 {
+		t.Fatalf("expected reload to have been called once, got %d", callCount.Load())
+	}
+
+	// Second change: triggers reload which succeeds.
+	if err := os.WriteFile(configFile, []byte(`{"attempt": 2}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	if callCount.Load() != 2 {
+		t.Fatalf("expected reload to have been called twice, got %d", callCount.Load())
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("unexpected error from Run: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not stop within timeout")
+	}
+}
+
+func TestWatcher_DirectoryDoesNotExist_ReturnsError(t *testing.T) {
+	nonExistentDir := filepath.Join(t.TempDir(), "nonexistent_subdir")
+
+	w := New(nonExistentDir, func(_ context.Context) error {
+		t.Error("reload should not be called")
+		return nil
+	}, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := w.Run(ctx)
+	if err == nil {
+		t.Fatal("expected error when directory does not exist, got nil")
 	}
 }
 

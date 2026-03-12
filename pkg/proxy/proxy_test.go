@@ -201,6 +201,122 @@ func freeLocalAddr(t *testing.T) string {
 	return listener.Addr().String()
 }
 
+func TestProxyReturnsServfailWhenEngineUnreachable(t *testing.T) {
+	// Point the proxy at an address where no DNS engine is running.
+	// We allocate a free port and immediately close it so nothing listens.
+	unreachableAddr := freeLocalAddr(t)
+
+	listenAddr := freeLocalAddr(t)
+	p := New(ProxyConfig{ListenAddr: listenAddr, EngineAddr: unreachableAddr, EventChanSize: 8})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Start(ctx)
+	}()
+
+	response := exchangeWithRetry(t, "udp", listenAddr, "example.org.")
+	if response.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("expected SERVFAIL (rcode %d), got rcode %d", dns.RcodeServerFailure, response.Rcode)
+	}
+
+	// Verify the event is emitted with SERVFAIL response code.
+	select {
+	case event := <-p.Events():
+		if event.ResponseCode != "SERVFAIL" {
+			t.Fatalf("expected event ResponseCode SERVFAIL, got %q", event.ResponseCode)
+		}
+		if event.Domain != "example.org" {
+			t.Fatalf("expected event Domain example.org, got %q", event.Domain)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for query event")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("unexpected proxy start error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not stop after context cancellation")
+	}
+}
+
+func TestProxyReturnsServfailWhenEngineReturnsNilResponse(t *testing.T) {
+	// Start an engine that reads packets but never responds.
+	// This simulates a timeout in the proxy's internal DNS client, causing a nil response.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create udp listener: %v", err)
+	}
+
+	silentAddr := conn.LocalAddr().String()
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			_, _, readErr := conn.ReadFrom(buf)
+			if readErr != nil {
+				return
+			}
+			// Intentionally do not respond.
+		}
+	}()
+	defer conn.Close()
+
+	listenAddr := freeLocalAddr(t)
+	p := New(ProxyConfig{ListenAddr: listenAddr, EngineAddr: silentAddr, EventChanSize: 8})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.Start(ctx)
+	}()
+
+	// The proxy's internal client has a 2s timeout. Use a longer per-attempt
+	// and total deadline so the caller waits long enough for the proxy to
+	// receive the timeout and respond with SERVFAIL.
+	response := exchangeWithLongTimeout(t, "udp", listenAddr, "timeout.example.org.")
+	if response.Rcode != dns.RcodeServerFailure {
+		t.Fatalf("expected SERVFAIL (rcode %d), got rcode %d", dns.RcodeServerFailure, response.Rcode)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("unexpected proxy start error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy did not stop after context cancellation")
+	}
+}
+
+// exchangeWithLongTimeout sends a DNS query with a generous timeout, suitable
+// for tests where the proxy's internal exchange may take up to 2 seconds.
+func exchangeWithLongTimeout(t *testing.T, network, addr, domain string) *dns.Msg {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		query := new(dns.Msg)
+		query.SetQuestion(domain, dns.TypeA)
+
+		client := &dns.Client{Net: network, Timeout: 5 * time.Second}
+		response, _, err := client.Exchange(query, addr)
+		if err == nil {
+			return response
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("dns query failed after retries: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func exchangeWithRetry(t *testing.T, network, addr, domain string) *dns.Msg {
 	t.Helper()
 

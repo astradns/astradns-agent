@@ -165,6 +165,111 @@ func TestCheckerFallsBackToTCPWhenUDPUnavailable(t *testing.T) {
 	}
 }
 
+func TestCheckerMultipleUpstreams_OneHealthyOneUnhealthy(t *testing.T) {
+	// Start a healthy upstream.
+	healthyHost, healthyPort, healthyResponsive, healthyStop := startToggleUpstream(t)
+	defer healthyStop()
+	healthyResponsive.Store(true)
+
+	// Start an unhealthy upstream (never responds).
+	unhealthyHost, unhealthyPort, unhealthyResponsive, unhealthyStop := startToggleUpstream(t)
+	defer unhealthyStop()
+	unhealthyResponsive.Store(false)
+
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams: []UpstreamTarget{
+			{Address: healthyHost, Port: healthyPort},
+			{Address: unhealthyHost, Port: unhealthyPort},
+		},
+		IntervalSeconds:  30,
+		TimeoutSeconds:   1,
+		FailureThreshold: 1,
+	}, collector)
+
+	checker.CheckNow(context.Background())
+
+	if !checker.HasHealthyUpstream() {
+		t.Fatal("expected HasHealthyUpstream to be true when one upstream is healthy")
+	}
+
+	healthyLabel := fmt.Sprintf("%s:%d", healthyHost, healthyPort)
+	if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(healthyLabel)); got != 1 {
+		t.Fatalf("expected healthy upstream gauge = 1, got %v", got)
+	}
+}
+
+func TestCheckerMultipleUpstreams_BothUnhealthy(t *testing.T) {
+	host1, port1, responsive1, stop1 := startToggleUpstream(t)
+	defer stop1()
+	responsive1.Store(false)
+
+	host2, port2, responsive2, stop2 := startToggleUpstream(t)
+	defer stop2()
+	responsive2.Store(false)
+
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams: []UpstreamTarget{
+			{Address: host1, Port: port1},
+			{Address: host2, Port: port2},
+		},
+		IntervalSeconds:  30,
+		TimeoutSeconds:   1,
+		FailureThreshold: 1,
+	}, collector)
+
+	checker.CheckNow(context.Background())
+
+	if checker.HasHealthyUpstream() {
+		t.Fatal("expected HasHealthyUpstream to be false when both upstreams are unhealthy")
+	}
+}
+
+func TestCheckerPort0NormalizesTo53(t *testing.T) {
+	// Verify that upstreamLabel normalizes port 0 to port 53.
+	target := UpstreamTarget{Address: "10.0.0.1", Port: 0}
+	label := upstreamLabel(target)
+	expected := "10.0.0.1:53"
+	if label != expected {
+		t.Fatalf("expected label %q for port 0, got %q", expected, label)
+	}
+}
+
+func TestCheckerContextCancellationDuringHealthCheck(t *testing.T) {
+	// Start an upstream that never responds to simulate a slow health check.
+	host, port, responsive, stop := startToggleUpstream(t)
+	defer stop()
+	responsive.Store(false)
+
+	collector := metrics.NewCollector(prometheus.NewRegistry())
+	checker := NewChecker(CheckerConfig{
+		Upstreams:        []UpstreamTarget{{Address: host, Port: port}},
+		IntervalSeconds:  1,
+		TimeoutSeconds:   2,
+		FailureThreshold: 3,
+	}, collector)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		checker.Run(ctx)
+		close(done)
+	}()
+
+	// Cancel the context quickly.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+		// Run returned as expected after context cancellation.
+	case <-time.After(5 * time.Second):
+		t.Fatal("checker.Run did not return after context cancellation")
+	}
+}
+
 func startToggleUpstream(t *testing.T) (string, int, *atomic.Bool, func()) {
 	t.Helper()
 
