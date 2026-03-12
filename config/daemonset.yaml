@@ -18,6 +18,7 @@ spec:
         app.kubernetes.io/component: data-plane
     spec:
       serviceAccountName: astradns-agent
+      automountServiceAccountToken: false
       containers:
       - name: agent
         image: astradns/agent:latest
@@ -97,6 +98,7 @@ spec:
 ---
 apiVersion: v1
 kind: ServiceAccount
+automountServiceAccountToken: false
 metadata:
   name: astradns-agent
   namespace: astradns-operator-system
