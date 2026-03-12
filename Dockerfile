@@ -5,19 +5,15 @@ ARG TARGETARCH
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
-COPY astradns-agent/go.mod astradns-agent/go.mod
-COPY astradns-agent/go.sum astradns-agent/go.sum
-COPY astradns-types/go.mod astradns-types/go.mod
-COPY astradns-types/go.sum astradns-types/go.sum
+COPY go.mod go.mod
+COPY go.sum go.sum
 
-WORKDIR /workspace/astradns-agent
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
 # Copy the Go source (relies on .dockerignore to filter)
-COPY astradns-agent /workspace/astradns-agent
-COPY astradns-types /workspace/astradns-types
+COPY . /workspace
 
 # Build
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /out/astradns-agent cmd/agent/main.go
