@@ -579,6 +579,24 @@ func TestIsValidUpstreamAddress(t *testing.T) {
 	}
 }
 
+func TestValidateEngineConfigRejectsPaddedUpstreamAddress(t *testing.T) {
+	cfg := defaultEngineConfig("127.0.0.1:5354")
+	cfg.Upstreams[0].Address = " 1.1.1.1"
+
+	if err := validateEngineConfig(cfg); err == nil {
+		t.Fatal("expected error for upstream address with leading whitespace")
+	}
+}
+
+func TestValidateEngineConfigRejectsDuplicateUpstreams(t *testing.T) {
+	cfg := defaultEngineConfig("127.0.0.1:5354")
+	cfg.Upstreams = append(cfg.Upstreams, cfg.Upstreams[0])
+
+	if err := validateEngineConfig(cfg); err == nil {
+		t.Fatal("expected error for duplicate upstream entries")
+	}
+}
+
 type mockReloadEngine struct {
 	configureErr error
 	reloadErr    error

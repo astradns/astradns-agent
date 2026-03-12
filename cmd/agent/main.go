@@ -335,13 +335,24 @@ func validateEngineConfig(cfg engine.EngineConfig) error {
 	if len(cfg.Upstreams) == 0 {
 		return fmt.Errorf("at least one upstream is required")
 	}
+	seenUpstreams := make(map[string]struct{}, len(cfg.Upstreams))
 	for i, upstream := range cfg.Upstreams {
-		if !isValidUpstreamAddress(upstream.Address) {
+		trimmedAddress := strings.TrimSpace(upstream.Address)
+		if upstream.Address != trimmedAddress {
+			return fmt.Errorf("upstreams[%d].address must not include leading or trailing whitespace", i)
+		}
+		if !isValidUpstreamAddress(trimmedAddress) {
 			return fmt.Errorf("upstreams[%d].address must be a valid IP or DNS name", i)
 		}
 		if upstream.Port <= 0 || upstream.Port > 65535 {
 			return fmt.Errorf("upstreams[%d].port must be between 1 and 65535", i)
 		}
+
+		upstreamKey := fmt.Sprintf("%s:%d", trimmedAddress, upstream.Port)
+		if _, exists := seenUpstreams[upstreamKey]; exists {
+			return fmt.Errorf("upstreams[%d] %q is duplicated", i, upstreamKey)
+		}
+		seenUpstreams[upstreamKey] = struct{}{}
 	}
 	if cfg.Cache.MaxEntries <= 0 {
 		return fmt.Errorf("cache.maxEntries must be greater than zero")
