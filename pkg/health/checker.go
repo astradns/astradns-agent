@@ -3,8 +3,10 @@ package health
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +20,14 @@ type CheckerConfig struct {
 	IntervalSeconds  int
 	TimeoutSeconds   int
 	FailureThreshold int
+	ProbeDomain      string
+	ProbeType        uint16
 }
+
+const (
+	defaultProbeDomain = "."
+	defaultProbeType   = dns.TypeNS
+)
 
 // UpstreamTarget is a health check target.
 type UpstreamTarget struct {
@@ -46,6 +55,12 @@ func NewChecker(config CheckerConfig, collector *metrics.Collector) *Checker {
 	}
 	if config.FailureThreshold <= 0 {
 		config.FailureThreshold = 3
+	}
+	if strings.TrimSpace(config.ProbeDomain) == "" {
+		config.ProbeDomain = defaultProbeDomain
+	}
+	if config.ProbeType == 0 {
+		config.ProbeType = defaultProbeType
 	}
 
 	checker := &Checker{
@@ -205,11 +220,15 @@ func (c *Checker) probeUpstream(ctx context.Context, upstream, network string) (
 	timeout := time.Duration(c.config.TimeoutSeconds) * time.Second
 	client := &dns.Client{Net: network, Timeout: timeout}
 	query := new(dns.Msg)
-	query.SetQuestion("health.astradns.local.", dns.TypeA)
+	query.SetQuestion(dns.Fqdn(c.config.ProbeDomain), c.config.ProbeType)
 
 	response, rtt, err := client.ExchangeContext(ctx, query, upstream)
 	if err != nil || response == nil {
 		return response, rtt, err
+	}
+
+	if response.Rcode == dns.RcodeServerFailure || response.Rcode == dns.RcodeRefused {
+		return response, rtt, fmt.Errorf("probe rcode %s", dns.RcodeToString[response.Rcode])
 	}
 
 	return response, rtt, nil

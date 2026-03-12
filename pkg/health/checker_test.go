@@ -43,6 +43,55 @@ func TestCheckerHealthyUpstreamSetsGaugeToOne(t *testing.T) {
 	}
 }
 
+func TestNewCheckerDefaultsProbeConfig(t *testing.T) {
+	checker := NewChecker(CheckerConfig{}, nil)
+
+	if checker.config.ProbeDomain != defaultProbeDomain {
+		t.Fatalf("expected default probe domain %q, got %q", defaultProbeDomain, checker.config.ProbeDomain)
+	}
+	if checker.config.ProbeType != defaultProbeType {
+		t.Fatalf("expected default probe type %d, got %d", defaultProbeType, checker.config.ProbeType)
+	}
+}
+
+func TestCheckerTreatsServfailAndRefusedAsUnhealthy(t *testing.T) {
+	tests := []struct {
+		name  string
+		rcode int
+	}{
+		{name: "servfail", rcode: dns.RcodeServerFailure},
+		{name: "refused", rcode: dns.RcodeRefused},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, port, stop := startRcodeUpstream(t, tt.rcode)
+			defer stop()
+
+			collector := metrics.NewCollector(prometheus.NewRegistry())
+			checker := NewChecker(CheckerConfig{
+				Upstreams:        []UpstreamTarget{{Address: host, Port: port}},
+				IntervalSeconds:  30,
+				TimeoutSeconds:   1,
+				FailureThreshold: 1,
+			}, collector)
+
+			checker.CheckNow(context.Background())
+
+			upstream := fmt.Sprintf("%s:%d", host, port)
+			if got := testutil.ToFloat64(collector.UpstreamHealthy.WithLabelValues(upstream)); got != 0 {
+				t.Fatalf("expected upstream healthy gauge = 0, got %v", got)
+			}
+			if got := testutil.ToFloat64(collector.UpstreamFailuresTotal.WithLabelValues(upstream)); got != 1 {
+				t.Fatalf("expected one upstream failure, got %v", got)
+			}
+			if checker.HasHealthyUpstream() {
+				t.Fatal("expected no healthy upstream for SERVFAIL/REFUSED probes")
+			}
+		})
+	}
+}
+
 func TestCheckerTimeoutSetsGaugeToZeroAfterThreshold(t *testing.T) {
 	host, port, responsive, stop := startToggleUpstream(t)
 	defer stop()
@@ -374,6 +423,33 @@ func startTCPOnlyUpstream(t *testing.T) (string, int, func()) {
 	})
 
 	server := &dns.Server{Listener: listener, Net: "tcp", Handler: handler}
+	go func() {
+		_ = server.ActivateAndServe()
+	}()
+
+	stop := func() {
+		_ = server.Shutdown()
+	}
+
+	return addr.IP.String(), addr.Port, stop
+}
+
+func startRcodeUpstream(t *testing.T, rcode int) (string, int, func()) {
+	t.Helper()
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start rcode test upstream: %v", err)
+	}
+
+	addr := conn.LocalAddr().(*net.UDPAddr)
+	handler := dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		response := new(dns.Msg)
+		response.SetRcode(r, rcode)
+		_ = w.WriteMsg(response)
+	})
+
+	server := &dns.Server{PacketConn: conn, Net: "udp", Handler: handler}
 	go func() {
 		_ = server.ActivateAndServe()
 	}()
