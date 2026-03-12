@@ -17,6 +17,15 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - engine: unbound
+            engine_image: ghcr.io/astradns/unbound:1.24.2
+          - engine: powerdns
+            engine_image: ghcr.io/astradns/powerdns-recursor:5.4.0
+          - engine: bind
+            engine_image: ghcr.io/astradns/bind:9.20.20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,9 +53,11 @@ jobs:
           make vet
 
       - name: Build agent binary
+        if: matrix.engine == 'unbound'
         run: make build
 
       - name: Package release artifacts
+        if: matrix.engine == 'unbound'
         run: |
           mkdir -p dist
           cp bin/astradns-agent dist/astradns-agent-linux-amd64
@@ -71,7 +82,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=tag
+            type=ref,event=tag,suffix=-${{ matrix.engine }}
 
       - name: Build and push image
         id: build-image
@@ -81,25 +92,35 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            ENGINE_IMAGE=${{ matrix.engine_image }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export image digest
         run: |
-          echo "${{ steps.build-image.outputs.digest }}" > dist/container-digest.txt
+          mkdir -p dist
+          echo "${{ steps.build-image.outputs.digest }}" > dist/container-digest-${{ matrix.engine }}.txt
 
       - name: Upload binary artifact
+        if: matrix.engine == 'unbound'
         uses: actions/upload-artifact@v4
         with:
           name: astradns-agent-${{ github.ref_name }}
           path: dist/*
 
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: astradns-agent-${{ github.ref_name }}-${{ matrix.engine }}-digest
+          path: dist/container-digest-${{ matrix.engine }}.txt
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && matrix.engine == 'unbound'
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
             dist/astradns-agent-linux-amd64
             dist/astradns-agent-linux-amd64.sha256
-            dist/container-digest.txt
+            dist/container-digest-*.txt

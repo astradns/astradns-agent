@@ -1,0 +1,112 @@
+name: Release Engine Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: "Engines to build (comma-separated: unbound,powerdns,bind)"
+        required: true
+        default: "unbound,powerdns,bind"
+      unbound_version:
+        description: "Unbound version"
+        required: false
+        default: "1.24.2"
+      powerdns_repo_version:
+        description: "PowerDNS repo version (e.g. 54 for rec-54)"
+        required: false
+        default: "54"
+      powerdns_version:
+        description: "PowerDNS version tag"
+        required: false
+        default: "5.4.0"
+      bind_version:
+        description: "BIND version"
+        required: false
+        default: "9.20.20"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-unbound:
+    if: contains(inputs.engines, 'unbound')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: build/engines/unbound
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            UNBOUND_VERSION=${{ inputs.unbound_version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/unbound:${{ inputs.unbound_version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/unbound:latest
+          cache-from: type=gha,scope=unbound
+          cache-to: type=gha,scope=unbound,mode=max
+
+  build-powerdns:
+    if: contains(inputs.engines, 'powerdns')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: build/engines/powerdns
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            PDNS_REPO_VERSION=${{ inputs.powerdns_repo_version }}
+            PDNS_VERSION=${{ inputs.powerdns_version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/powerdns-recursor:${{ inputs.powerdns_version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/powerdns-recursor:latest
+          cache-from: type=gha,scope=powerdns
+          cache-to: type=gha,scope=powerdns,mode=max
+
+  build-bind:
+    if: contains(inputs.engines, 'bind')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: build/engines/bind
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            BIND_VERSION=${{ inputs.bind_version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/bind:${{ inputs.bind_version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/bind:latest
+          cache-from: type=gha,scope=bind
+          cache-to: type=gha,scope=bind,mode=max

@@ -4,24 +4,22 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
-# Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
-
-# cache deps before building and copying source so that we don't need to re-download as much
-# and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
-# Copy the Go source (relies on .dockerignore to filter)
 COPY . /workspace
 
-# Build
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /out/astradns-agent cmd/agent/main.go
 
-# Runtime image with unbound resolver binaries.
-# Distroless was evaluated, but this image currently needs distro-packaged
-# resolver binaries (unbound/unbound-control) and their runtime libraries.
-FROM debian:bookworm-slim
+# Runtime image: engine image as base + agent binary on top.
+# The ENGINE_IMAGE already contains the DNS engine binaries and runtime libs.
+# Override via --build-arg to select engine variant:
+#   ENGINE_IMAGE=ghcr.io/astradns/unbound:1.24.2      (default)
+#   ENGINE_IMAGE=ghcr.io/astradns/powerdns-recursor:5.1
+#   ENGINE_IMAGE=ghcr.io/astradns/bind:9.20.20
+ARG ENGINE_IMAGE=ghcr.io/astradns/unbound:1.24.2
+FROM ${ENGINE_IMAGE}
 
 ARG OCI_TITLE="astradns-agent"
 ARG OCI_DESCRIPTION="AstraDNS node-local DNS agent"
@@ -37,16 +35,7 @@ LABEL org.opencontainers.image.title="${OCI_TITLE}" \
       org.opencontainers.image.revision="${OCI_REVISION}" \
       org.opencontainers.image.created="${OCI_CREATED}"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    unbound \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY --from=builder /out/astradns-agent /usr/local/bin/astradns-agent
-
-RUN useradd --system --uid 65532 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin astradns && \
-    mkdir -p /var/run/astradns/engine && \
-    chown -R 65532:65532 /var/run/astradns
 
 USER 65532:65532
 
