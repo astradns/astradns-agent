@@ -46,9 +46,9 @@ RUN ./configure \
     && make -j"$(nproc)" \
     && make install \
     && strip /opt/bind/sbin/named \
-    && strip /opt/bind/bin/rndc \
-    && strip /opt/bind/bin/dig \
-    && strip /opt/bind/bin/delv
+    && for bin in /opt/bind/bin/rndc /opt/bind/sbin/rndc /opt/bind/bin/dig /opt/bind/bin/delv; do \
+         if [ -x "$bin" ]; then strip "$bin"; fi; \
+       done
 
 # ---------------------------------------------------------------------------
 # Stage 2: minimal runtime
@@ -78,9 +78,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/bind /opt/bind
 
 RUN ln -s /opt/bind/sbin/named /usr/sbin/named \
-    && ln -s /opt/bind/bin/rndc /usr/sbin/rndc \
-    && ln -s /opt/bind/bin/dig /usr/bin/dig \
-    && ln -s /opt/bind/bin/delv /usr/bin/delv
+    && if [ -x /opt/bind/bin/rndc ]; then \
+         ln -s /opt/bind/bin/rndc /usr/sbin/rndc; \
+       elif [ -x /opt/bind/sbin/rndc ]; then \
+         ln -s /opt/bind/sbin/rndc /usr/sbin/rndc; \
+       fi \
+    && if [ -x /opt/bind/bin/dig ]; then ln -s /opt/bind/bin/dig /usr/bin/dig; fi \
+    && if [ -x /opt/bind/bin/delv ]; then ln -s /opt/bind/bin/delv /usr/bin/delv; fi
 
 RUN groupadd --system --gid 65532 astradns \
     && useradd --system --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin astradns \
